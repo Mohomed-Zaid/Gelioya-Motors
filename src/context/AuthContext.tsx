@@ -24,12 +24,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return
     }
 
-    // Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session)
-      setUser(session?.user ?? null)
-      setLoading(false)
-    }).catch(() => {
+    // Always sign out on fresh load — session should not survive tab close
+    supabase.auth.signOut().finally(() => {
+      setSession(null)
+      setUser(null)
       setLoading(false)
     })
 
@@ -41,18 +39,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     return () => subscription.unsubscribe()
   }, [])
-
-  // Sign out on tab close so user must re-login
-  useEffect(() => {
-    const handleBeforeUnload = () => {
-      if (supabase && session) {
-        // Use sendBeacon for reliability during tab close
-        supabase.auth.signOut()
-      }
-    }
-    window.addEventListener('beforeunload', handleBeforeUnload)
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
-  }, [session])
 
   const signIn = useCallback(async (email: string, password: string) => {
     if (!supabase) throw new Error('Supabase is not configured')

@@ -7,14 +7,7 @@ const isConfigured = supabaseUrl && supabaseAnonKey &&
   (supabaseUrl.startsWith('http://') || supabaseUrl.startsWith('https://'))
 
 export const supabase: SupabaseClient | null = isConfigured
-  ? createClient(supabaseUrl, supabaseAnonKey, {
-      auth: {
-        storage: sessionStorage,
-        autoRefreshToken: false,
-        persistSession: true,
-        detectSessionInUrl: false,
-      },
-    })
+  ? createClient(supabaseUrl, supabaseAnonKey)
   : null
 
 export function isSupabaseConfigured(): boolean {

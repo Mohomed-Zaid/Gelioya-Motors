@@ -3,11 +3,12 @@ import { HandCoins, Plus, Search, Pencil, Trash2, ChevronDown, ChevronUp, Users,
 import { AppShell } from '../layout/AppShell'
 import { Modal } from '../components/Modal'
 import { SummaryCard } from '../components/SummaryCard'
-import { getReceivables, collectReceivablePayment, deleteReceivablePayment, updateSale, deleteSale, getPartyOffsets } from '../services/businessService'
-import type { ReceivableWithSale, PaymentType } from '../types'
+import { getReceivables, collectReceivablePayment, deleteReceivablePayment, updateSale, deleteSale, getPartyOffsets, createSale, getParties } from '../services/businessService'
+import type { ReceivableWithSale, PaymentType, SaleItemInput, Party } from '../types'
 import type { PartyOffsetWithPurchase } from '../services/businessService'
-import { formatCurrency, formatDate, parseCurrencyInput } from '../lib/utils'
+import { formatCurrency, formatDate, parseCurrencyInput, todayISO } from '../lib/utils'
 import { CurrencyInput } from '../components/CurrencyInput'
+import { PartyCombobox } from '../components/PartyCombobox'
 
 type CustomerGroup = {
   customerName: string
@@ -19,6 +20,19 @@ type CustomerGroup = {
   totalOverpaid: number
   invoiceCount: number
   pendingCount: number
+}
+
+interface DraftReceivableItem {
+  key: string
+  item_name: string
+  quantity: string
+  cost_price: string
+  selling_price: string
+}
+
+let itemKeyCounter = 0
+function newReceivableItem(): DraftReceivableItem {
+  return { key: `item-${++itemKeyCounter}`, item_name: '', quantity: '1', cost_price: '', selling_price: '' }
 }
 
 export function ReceivablesPage() {
@@ -61,6 +75,16 @@ export function ReceivablesPage() {
   const [expandedReceivable, setExpandedReceivable] = useState<string | null>(null)
   const [offsetDetails, setOffsetDetails] = useState<Record<string, PartyOffsetWithPurchase[]>>({})
 
+  // New credit sale modal state
+  const [showNewSaleModal, setShowNewSaleModal] = useState(false)
+  const [newSaleCustomer, setNewSaleCustomer] = useState('')
+  const [newSalePartyId, setNewSalePartyId] = useState<string | null>(null)
+  const [newSaleParties, setNewSaleParties] = useState<Party[]>([])
+  const [newSaleDate, setNewSaleDate] = useState(todayISO())
+  const [newSaleNotes, setNewSaleNotes] = useState('')
+  const [newSaleItems, setNewSaleItems] = useState<DraftReceivableItem[]>([newReceivableItem()])
+  const [newSaleError, setNewSaleError] = useState('')
+
   const loadReceivables = async () => {
     try {
       const data = await getReceivables()
@@ -75,6 +99,83 @@ export function ReceivablesPage() {
   useEffect(() => {
     loadReceivables()
   }, [])
+
+  const openNewSaleModal = async () => {
+    setNewSaleCustomer('')
+    setNewSalePartyId(null)
+    setNewSaleDate(todayISO())
+    setNewSaleNotes('')
+    setNewSaleItems([newReceivableItem()])
+    setNewSaleError('')
+    setShowNewSaleModal(true)
+    try {
+      const pt = await getParties()
+      setNewSaleParties(pt)
+    } catch { /* ignore */ }
+  }
+
+  const updateNewSaleItem = (index: number, field: keyof DraftReceivableItem, value: string) => {
+    setNewSaleItems(prev => prev.map((item, i) => i === index ? { ...item, [field]: value } : item))
+  }
+
+  const removeNewSaleItem = (index: number) => {
+    setNewSaleItems(prev => prev.filter((_, i) => i !== index))
+  }
+
+  const newSaleTotalCost = newSaleItems.reduce((sum, item) => {
+    const qty = parseInt(item.quantity) || 1
+    const cp = parseFloat(item.cost_price) || 0
+    return sum + cp * qty
+  }, 0)
+
+  const newSaleTotalSales = newSaleItems.reduce((sum, item) => {
+    const qty = parseInt(item.quantity) || 1
+    const sp = parseFloat(item.selling_price) || 0
+    return sum + sp * qty
+  }, 0)
+
+  const handleNewSaleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setNewSaleError('')
+
+    if (!newSaleCustomer.trim()) { setNewSaleError('Customer name is required.'); return }
+    const validItems = newSaleItems.filter(i => i.item_name.trim() && i.selling_price.trim())
+    if (validItems.length === 0) { setNewSaleError('At least one item with a selling price is required.'); return }
+
+    const saleItems: SaleItemInput[] = validItems.map(item => {
+      const qty = parseInt(item.quantity) || 1
+      const cp = parseFloat(item.cost_price) || 0
+      const sp = parseFloat(item.selling_price) || 0
+      return { item_name: item.item_name.trim(), quantity: qty, cost_price: cp * qty, selling_price: sp * qty, profit: sp * qty - cp * qty }
+    })
+
+    const inputTotalCost = saleItems.reduce((s, i) => s + i.cost_price, 0)
+    const inputTotalSales = saleItems.reduce((s, i) => s + i.selling_price, 0)
+    const inputTotalProfit = saleItems.reduce((s, i) => s + i.profit, 0)
+
+    if (inputTotalSales <= 0) { setNewSaleError('Total selling price must be greater than zero.'); return }
+
+    setSubmitting(true)
+    try {
+      await createSale({
+        customer_name: newSaleCustomer.trim(),
+        party_id: newSalePartyId || null,
+        invoice_date: newSaleDate,
+        total_cost: inputTotalCost,
+        total_sales: inputTotalSales,
+        total_profit: inputTotalProfit,
+        payment_type: 'credit',
+        notes: newSaleNotes.trim() || undefined,
+        items: saleItems,
+      })
+      setShowNewSaleModal(false)
+      loadReceivables()
+    } catch (err: unknown) {
+      setNewSaleError(err instanceof Error ? err.message : 'Failed to create credit sale.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
 
   const handleCollect = (recv: ReceivableWithSale) => {
     setSelectedReceivable(recv)
@@ -250,9 +351,17 @@ export function ReceivablesPage() {
   return (
     <AppShell>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-100">Receivables</h1>
-          <p className="text-sm text-slate-300 mt-0.5">Track credit sales and collect payments</p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-100">Receivables</h1>
+            <p className="text-sm text-slate-300 mt-0.5">Track credit sales and collect payments</p>
+          </div>
+          <button
+            onClick={openNewSaleModal}
+            className="flex items-center gap-2 gradient-primary hover:shadow-lg hover:shadow-emerald-500/20 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition-all"
+          >
+            <Plus size={16} /> New Credit Sale
+          </button>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-5 gap-4">
@@ -1079,6 +1188,152 @@ export function ReceivablesPage() {
             </div>
           </form>
         )}
+      </Modal>
+
+      {/* New Credit Sale Modal */}
+      <Modal isOpen={showNewSaleModal} onClose={() => setShowNewSaleModal(false)} title="New Credit Sale" maxWidth="max-w-3xl">
+        <form onSubmit={handleNewSaleSubmit} className="space-y-4">
+          <div className="bg-emerald-950/30 border border-emerald-900/30 rounded-xl p-4">
+            <div className="flex items-center gap-2 text-sm text-amber-200 font-semibold">
+              <HandCoins size={16} />
+              This will create a credit sale — the amount goes to receivables, not cash.
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-semibold text-slate-200 mb-1.5">Customer Name</label>
+              <PartyCombobox
+                value={newSaleCustomer}
+                onNameChange={setNewSaleCustomer}
+                onPartySelect={(pId, name) => { setNewSalePartyId(pId); setNewSaleCustomer(name) }}
+                partyId={newSalePartyId}
+                parties={newSaleParties}
+                placeholder="Customer name"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-slate-200 mb-1.5">Invoice Date</label>
+              <input
+                type="date"
+                value={newSaleDate}
+                onChange={(e) => setNewSaleDate(e.target.value)}
+                className="w-full px-4 py-3 input-surface rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
+                required
+              />
+            </div>
+          </div>
+
+          {/* Items */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-sm font-semibold text-slate-200">Items</label>
+              <button
+                type="button"
+                onClick={() => setNewSaleItems(prev => [...prev, newReceivableItem()])}
+                className="flex items-center gap-1 text-xs text-emerald-300 hover:text-emerald-200 transition-colors"
+              >
+                <Plus size={14} /> Add Item
+              </button>
+            </div>
+            <div className="space-y-2">
+              {newSaleItems.map((item, index) => (
+                <div key={item.key} className="grid grid-cols-12 gap-2 items-end">
+                  <div className="col-span-4">
+                    {index === 0 && <label className="block text-xs text-slate-500 mb-1">Item Name</label>}
+                    <input
+                      type="text"
+                      value={item.item_name}
+                      onChange={(e) => updateNewSaleItem(index, 'item_name', e.target.value)}
+                      className="w-full px-3 py-2.5 input-surface rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                      placeholder="Item name"
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    {index === 0 && <label className="block text-xs text-slate-500 mb-1">Qty</label>}
+                    <input
+                      type="number"
+                      value={item.quantity}
+                      onChange={(e) => updateNewSaleItem(index, 'quantity', e.target.value)}
+                      className="w-full px-3 py-2.5 input-surface rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                      min="1"
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    {index === 0 && <label className="block text-xs text-slate-500 mb-1">Cost Price</label>}
+                    <CurrencyInput
+                      value={item.cost_price}
+                      onChange={(v) => updateNewSaleItem(index, 'cost_price', v)}
+                      placeholder="0.00"
+                      className="w-full pl-8 pr-2 py-2.5 input-surface rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                    />
+                  </div>
+                  <div className="col-span-3">
+                    {index === 0 && <label className="block text-xs text-slate-500 mb-1">Selling Price</label>}
+                    <CurrencyInput
+                      value={item.selling_price}
+                      onChange={(v) => updateNewSaleItem(index, 'selling_price', v)}
+                      placeholder="0.00"
+                      className="w-full pl-8 pr-2 py-2.5 input-surface rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                      required
+                    />
+                  </div>
+                  <div className="col-span-1 flex items-center justify-center">
+                    {newSaleItems.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removeNewSaleItem(index)}
+                        className="p-1.5 rounded-lg text-slate-500 hover:text-red-300 hover:bg-red-950/40 transition-all"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Summary */}
+          <div className="bg-emerald-950/30 border border-emerald-900/30 rounded-xl p-4">
+            <div className="grid grid-cols-3 gap-4 text-sm">
+              <div className="flex justify-between col-span-1">
+                <span className="text-slate-400">Total Cost</span>
+                <span className="text-blue-300 font-semibold">{formatCurrency(newSaleTotalCost)}</span>
+              </div>
+              <div className="flex justify-between col-span-1">
+                <span className="text-slate-400">Total Sales</span>
+                <span className="text-amber-300 font-bold">{formatCurrency(newSaleTotalSales)}</span>
+              </div>
+              <div className="flex justify-between col-span-1">
+                <span className="text-slate-400">Profit</span>
+                <span className={`font-bold ${newSaleTotalSales - newSaleTotalCost >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>{formatCurrency(newSaleTotalSales - newSaleTotalCost)}</span>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-semibold text-slate-200 mb-1.5">Notes (optional)</label>
+            <input
+              type="text"
+              value={newSaleNotes}
+              onChange={(e) => setNewSaleNotes(e.target.value)}
+              className="w-full px-4 py-3 input-surface rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+              placeholder="Notes..."
+            />
+          </div>
+
+          {newSaleError && (
+            <div className="bg-red-950/30 border border-red-900/40 text-red-200 text-sm rounded-xl px-4 py-3">{newSaleError}</div>
+          )}
+
+          <div className="flex gap-3 pt-2">
+            <button type="button" onClick={() => setShowNewSaleModal(false)} className="flex-1 px-4 py-3 border border-emerald-900/40 bg-emerald-950/20 text-slate-100 rounded-xl text-sm font-semibold hover:bg-emerald-950/35 transition-all">Cancel</button>
+            <button type="submit" disabled={submitting} className="flex items-center gap-2 gradient-primary hover:shadow-lg hover:shadow-emerald-500/20 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 disabled:opacity-50">
+              {submitting ? 'Creating...' : 'Create Credit Sale'}
+            </button>
+          </div>
+        </form>
       </Modal>
     </AppShell>
   )

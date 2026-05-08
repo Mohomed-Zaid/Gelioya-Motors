@@ -6,10 +6,24 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string
 const isConfigured = supabaseUrl && supabaseAnonKey &&
   (supabaseUrl.startsWith('http://') || supabaseUrl.startsWith('https://'))
 
+// Custom storage using sessionStorage — survives refresh, cleared on tab close
+const sessionStorageAdapter = {
+  getItem: (key: string) => {
+    const val = sessionStorage.getItem(key)
+    return val ? JSON.parse(val) : null
+  },
+  setItem: (key: string, value: unknown) => {
+    sessionStorage.setItem(key, JSON.stringify(value))
+  },
+  removeItem: (key: string) => {
+    sessionStorage.removeItem(key)
+  },
+}
+
 export const supabase: SupabaseClient | null = isConfigured
   ? createClient(supabaseUrl, supabaseAnonKey, {
       auth: {
-        persistSession: false,
+        storage: sessionStorageAdapter,
       },
     })
   : null

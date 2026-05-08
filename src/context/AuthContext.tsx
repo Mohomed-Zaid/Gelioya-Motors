@@ -24,10 +24,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return
     }
 
-    // Always sign out on fresh load — session should not survive tab close
-    supabase.auth.signOut().finally(() => {
-      setSession(null)
-      setUser(null)
+    // Get initial session (from sessionStorage — survives refresh, gone on tab close)
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session)
+      setUser(session?.user ?? null)
+      setLoading(false)
+    }).catch(() => {
       setLoading(false)
     })
 

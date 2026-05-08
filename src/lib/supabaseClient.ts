@@ -8,16 +8,9 @@ const isConfigured = supabaseUrl && supabaseAnonKey &&
 
 // Custom storage using sessionStorage — survives refresh, cleared on tab close
 const sessionStorageAdapter = {
-  getItem: (key: string) => {
-    const val = sessionStorage.getItem(key)
-    return val ? JSON.parse(val) : null
-  },
-  setItem: (key: string, value: unknown) => {
-    sessionStorage.setItem(key, JSON.stringify(value))
-  },
-  removeItem: (key: string) => {
-    sessionStorage.removeItem(key)
-  },
+  getItem: (key: string) => sessionStorage.getItem(key),
+  setItem: (key: string, value: string) => sessionStorage.setItem(key, value),
+  removeItem: (key: string) => sessionStorage.removeItem(key),
 }
 
 export const supabase: SupabaseClient | null = isConfigured

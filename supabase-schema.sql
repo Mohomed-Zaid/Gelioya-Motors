@@ -43,7 +43,7 @@ CREATE TABLE sales (
   total_cost NUMERIC(15,2) NOT NULL DEFAULT 0 CHECK (total_cost >= 0),
   total_sales NUMERIC(15,2) NOT NULL DEFAULT 0 CHECK (total_sales >= 0),
   total_profit NUMERIC(15,2) NOT NULL DEFAULT 0,
-  payment_type TEXT NOT NULL CHECK (payment_type IN ('cash', 'credit')),
+  payment_type TEXT NOT NULL CHECK (payment_type IN ('cash', 'credit', 'chequesale')),
   invoice_status TEXT NOT NULL DEFAULT 'completed' CHECK (invoice_status IN ('completed', 'cancelled')),
   notes TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -122,7 +122,7 @@ CREATE TABLE receivable_payments (
 -- ============================================
 CREATE TABLE cash_transactions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  type TEXT NOT NULL CHECK (type IN ('sale_cash', 'sale_credit', 'purchase_cash', 'purchase_credit', 'receivable_collection', 'payable_payment', 'expense', 'return')),
+  type TEXT NOT NULL CHECK (type IN ('sale_cash', 'sale_credit', 'sale_cheque', 'purchase_cash', 'purchase_credit', 'receivable_collection', 'payable_payment', 'expense', 'return')),
   reference_type TEXT NOT NULL CHECK (reference_type IN ('sale', 'purchase', 'receivable_payment', 'payable_payment', 'expense', 'return')),
   reference_id UUID NOT NULL,
   amount NUMERIC(15,2) NOT NULL,

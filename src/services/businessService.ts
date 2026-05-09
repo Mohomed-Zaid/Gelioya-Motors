@@ -446,13 +446,15 @@ export async function createSale(input: CreateSaleInput): Promise<Sale> {
   if (itemsError) throw itemsError
 
   // Update ledger: inventory decreases by total_cost only if cost exists
-  const ledgerUpdates: Partial<Pick<BusinessLedger, 'inventory_value' | 'cash_in_hand' | 'receivables_total'>> = {}
+  const ledgerUpdates: Partial<Pick<BusinessLedger, 'inventory_value' | 'cash_in_hand' | 'receivables_total' | 'on_cheque'>> = {}
   if (input.total_cost > 0) {
     ledgerUpdates.inventory_value = ledger.inventory_value - input.total_cost
   }
 
   if (input.payment_type === 'cash') {
     ledgerUpdates.cash_in_hand = ledger.cash_in_hand + input.total_sales
+  } else if (input.payment_type === 'chequesale') {
+    ledgerUpdates.on_cheque = ledger.on_cheque + input.total_sales
   } else {
     ledgerUpdates.receivables_total = ledger.receivables_total + input.total_sales
   }
@@ -460,7 +462,7 @@ export async function createSale(input: CreateSaleInput): Promise<Sale> {
   await updateLedger(ledgerUpdates)
 
   await logCashTransaction(
-    input.payment_type === 'cash' ? 'sale_cash' : 'sale_credit',
+    input.payment_type === 'cash' ? 'sale_cash' : input.payment_type === 'chequesale' ? 'sale_cheque' : 'sale_credit',
     'sale',
     sale.id,
     input.total_sales,
@@ -502,12 +504,14 @@ export async function updateSale(id: string, input: CreateSaleInput): Promise<Sa
   if (!existing) throw new Error('Sale not found.')
 
   // Reverse old sale's ledger impact
-  const reverseUpdates: Partial<Pick<BusinessLedger, 'inventory_value' | 'cash_in_hand' | 'receivables_total'>> = {}
+  const reverseUpdates: Partial<Pick<BusinessLedger, 'inventory_value' | 'cash_in_hand' | 'receivables_total' | 'on_cheque'>> = {}
   if (Number(existing.total_cost) > 0) {
     reverseUpdates.inventory_value = ledger.inventory_value + Number(existing.total_cost)
   }
   if (existing.payment_type === 'cash') {
     reverseUpdates.cash_in_hand = ledger.cash_in_hand - Number(existing.total_sales)
+  } else if (existing.payment_type === 'chequesale') {
+    reverseUpdates.on_cheque = ledger.on_cheque - Number(existing.total_sales)
   } else {
     reverseUpdates.receivables_total = ledger.receivables_total - Number(existing.total_sales)
   }
@@ -518,12 +522,14 @@ export async function updateSale(id: string, input: CreateSaleInput): Promise<Sa
     throw new Error('Total cost exceeds current inventory value.')
   }
 
-  const applyUpdates: Partial<Pick<BusinessLedger, 'inventory_value' | 'cash_in_hand' | 'receivables_total'>> = {}
+  const applyUpdates: Partial<Pick<BusinessLedger, 'inventory_value' | 'cash_in_hand' | 'receivables_total' | 'on_cheque'>> = {}
   if (input.total_cost > 0) {
     applyUpdates.inventory_value = newLedger.inventory_value - input.total_cost
   }
   if (input.payment_type === 'cash') {
     applyUpdates.cash_in_hand = newLedger.cash_in_hand + input.total_sales
+  } else if (input.payment_type === 'chequesale') {
+    applyUpdates.on_cheque = newLedger.on_cheque + input.total_sales
   } else {
     applyUpdates.receivables_total = newLedger.receivables_total + input.total_sales
   }
@@ -547,7 +553,7 @@ export async function updateSale(id: string, input: CreateSaleInput): Promise<Sa
   if (itemsError) throw itemsError
 
   await logCashTransaction(
-    input.payment_type === 'cash' ? 'sale_cash' : 'sale_credit',
+    input.payment_type === 'cash' ? 'sale_cash' : input.payment_type === 'chequesale' ? 'sale_cheque' : 'sale_credit',
     'sale',
     id,
     input.total_sales,
@@ -612,12 +618,14 @@ export async function deleteSale(id: string): Promise<void> {
   // Reverse sale's ledger impact
   const currentLedger = await getLedger()
   if (currentLedger) {
-    const reverseUpdates: Partial<Pick<BusinessLedger, 'inventory_value' | 'cash_in_hand' | 'receivables_total'>> = {}
+    const reverseUpdates: Partial<Pick<BusinessLedger, 'inventory_value' | 'cash_in_hand' | 'receivables_total' | 'on_cheque'>> = {}
     if (Number(existing.total_cost) > 0) {
       reverseUpdates.inventory_value = currentLedger.inventory_value + Number(existing.total_cost)
     }
     if (existing.payment_type === 'cash') {
       reverseUpdates.cash_in_hand = currentLedger.cash_in_hand - Number(existing.total_sales)
+    } else if (existing.payment_type === 'chequesale') {
+      reverseUpdates.on_cheque = currentLedger.on_cheque - Number(existing.total_sales)
     } else {
       reverseUpdates.receivables_total = currentLedger.receivables_total - Number(existing.total_sales)
     }

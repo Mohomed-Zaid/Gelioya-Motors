@@ -200,7 +200,7 @@ export function SalesPage() {
   )
 
   const filteredTotalSales = filtered.reduce((sum, s) => sum + Number(s.total_sales), 0)
-  const filteredCashSales = filtered.filter((s) => s.payment_type === 'cash').reduce((sum, s) => sum + Number(s.total_sales), 0)
+  const filteredCashSales = filtered.filter((s) => s.payment_type === 'cash' || s.payment_type === 'chequesale').reduce((sum, s) => sum + Number(s.total_sales), 0)
   const filteredTotalProfit = filtered.reduce((sum, s) => sum + Number(s.total_profit), 0)
 
   return (
@@ -301,9 +301,11 @@ export function SalesPage() {
                           <span className={`inline-flex px-2.5 py-1 rounded-lg text-xs font-semibold ${
                             sale.payment_type === 'cash'
                               ? 'bg-emerald-500/10 text-emerald-200 border border-emerald-900/30'
-                              : 'bg-amber-500/10 text-amber-200 border border-amber-900/30'
+                              : sale.payment_type === 'chequesale'
+                                ? 'bg-blue-500/10 text-blue-200 border border-blue-900/30'
+                                : 'bg-amber-500/10 text-amber-200 border border-amber-900/30'
                           }`}>
-                            {sale.payment_type}
+                            {sale.payment_type === 'chequesale' ? 'Cheque' : sale.payment_type}
                           </span>
                         </td>
                         <td className="px-5 py-3.5 text-slate-400">{formatDate(sale.invoice_date || sale.created_at)}</td>
@@ -454,10 +456,11 @@ export function SalesPage() {
                       <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">Payment Type</label>
                       <select
                         value={paymentType}
-                        onChange={(e) => setPaymentType(e.target.value as 'cash' | 'credit')}
+                        onChange={(e) => setPaymentType(e.target.value as PaymentType)}
                         className="w-full px-4 py-3 input-surface rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
                       >
                         <option value="cash">Cash</option>
+                        <option value="chequesale">Cheque</option>
                         <option value="credit">Credit</option>
                       </select>
                     </div>
@@ -588,6 +591,8 @@ export function SalesPage() {
                       </div>
                       {paymentType === 'cash' ? (
                         <p className="text-xs text-emerald-300/70 mt-3">Cash sale: inventory decreases by cost, cash increases by sales amount</p>
+                      ) : paymentType === 'chequesale' ? (
+                        <p className="text-xs text-blue-300/70 mt-3">Cheque sale: inventory decreases by cost, on cheque increases by sales amount</p>
                       ) : (
                         <p className="text-xs text-amber-300/70 mt-3">Credit sale: inventory decreases by cost, receivables increase by sales amount</p>
                       )}

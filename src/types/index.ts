@@ -10,7 +10,7 @@ export interface BusinessLedger {
   updated_at: string
 }
 
-export type PaymentType = 'cash' | 'credit'
+export type PaymentType = 'cash' | 'credit' | 'chequesale'
 
 export interface Sale {
   id: string
@@ -119,7 +119,7 @@ export interface CreateReturnInput {
   items: ReturnItemInput[]
 }
 
-export type CashTransactionType = 'sale_cash' | 'sale_credit' | 'purchase_cash' | 'purchase_credit' | 'receivable_collection' | 'payable_payment' | 'expense' | 'return'
+export type CashTransactionType = 'sale_cash' | 'sale_credit' | 'sale_cheque' | 'purchase_cash' | 'purchase_credit' | 'receivable_collection' | 'payable_payment' | 'expense' | 'return'
 export type CashReferenceType = 'sale' | 'purchase' | 'receivable_payment' | 'payable_payment' | 'expense' | 'return'
 export type CashDirection = 'in' | 'out'
 

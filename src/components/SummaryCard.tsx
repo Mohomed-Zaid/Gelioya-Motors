@@ -35,7 +35,7 @@ export function SummaryCard({ title, value, icon, trend, trendLabel, color = 'bl
       <div className="flex items-start justify-between">
         <div className="flex-1 min-w-0">
           <p className="text-xs font-semibold uppercase tracking-wider text-slate-300">{title}</p>
-          <p className="mt-2 text-2xl font-bold truncate text-slate-100">{value}</p>
+          <p className="mt-2 font-bold text-slate-100 leading-tight text-xl sm:text-2xl break-words">{value}</p>
           {trendLabel && (
             <div className="mt-2 flex items-center gap-1 text-xs text-slate-300">
               {trend === 'up' && <TrendingUp size={14} />}

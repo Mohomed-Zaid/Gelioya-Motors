@@ -1,20 +1,16 @@
 import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Package, Banknote, HandCoins, ShoppingCart, Truck, ArrowUpRight, ArrowDownRight, Clock, Wrench, AlertCircle, TrendingUp, TrendingDown, DollarSign, Receipt, BarChart3 } from 'lucide-react'
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts'
+import { Package, Banknote, HandCoins, ShoppingCart, Truck, ArrowUpRight, ArrowDownRight, Clock, Wrench, AlertCircle, Receipt } from 'lucide-react'
 import { AppShell } from '../layout/AppShell'
 import { SummaryCard } from '../components/SummaryCard'
-import { getDashboardStats, getRecentTransactions, getLedger, getMonthlyProfitTrend, getTopProfitInvoices, getTopLossInvoices } from '../services/businessService'
-import type { DashboardStats, RecentTransaction, MonthlyProfitTrend, Sale } from '../types'
+import { getDashboardStats, getRecentTransactions, getLedger } from '../services/businessService'
+import type { DashboardStats, RecentTransaction } from '../types'
 import { formatCurrency, formatDateTime } from '../lib/utils'
 
 export function DashboardPage() {
   const navigate = useNavigate()
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [recent, setRecent] = useState<RecentTransaction[]>([])
-  const [profitTrend, setProfitTrend] = useState<MonthlyProfitTrend[]>([])
-  const [topProfit, setTopProfit] = useState<Sale[]>([])
-  const [topLoss, setTopLoss] = useState<Sale[]>([])
   const [loading, setLoading] = useState(true)
   const [noLedger, setNoLedger] = useState(false)
   const [dbError, setDbError] = useState('')
@@ -27,18 +23,12 @@ export function DashboardPage() {
         setLoading(false)
         return
       }
-      const [s, r, trend, profitInv, lossInv] = await Promise.all([
+      const [s, r] = await Promise.all([
         getDashboardStats(),
         getRecentTransactions(8),
-        getMonthlyProfitTrend(6),
-        getTopProfitInvoices(3),
-        getTopLossInvoices(3),
       ])
       setStats(s)
       setRecent(r)
-      setProfitTrend(trend)
-      setTopProfit(profitInv)
-      setTopLoss(lossInv)
     } catch (err) {
       console.error('Dashboard load error:', err)
       setDbError(err instanceof Error ? err.message : 'Failed to connect to database')
@@ -171,57 +161,6 @@ export function DashboardPage() {
           />
         </div>
 
-        {/* Profit & Loss Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <SummaryCard
-            title="Total Profit"
-            value={formatCurrency(stats.totalProfit)}
-            icon={<TrendingUp size={22} />}
-            color="green"
-          />
-          <SummaryCard
-            title="Total Loss"
-            value={formatCurrency(Math.abs(stats.totalLoss))}
-            icon={<TrendingDown size={22} />}
-            color="red"
-          />
-          <SummaryCard
-            title="Net Profit"
-            value={formatCurrency(stats.netProfit)}
-            icon={<DollarSign size={22} />}
-            color={stats.netProfit >= 0 ? 'green' : 'red'}
-            trendLabel="Profit - Loss - Expenses"
-          />
-          <SummaryCard
-            title="Total Expenses"
-            value={formatCurrency(stats.totalExpenses)}
-            icon={<Receipt size={22} />}
-            color="amber"
-          />
-        </div>
-
-        {/* Period Profit Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <SummaryCard
-            title="Today's Profit"
-            value={formatCurrency(stats.todayProfit)}
-            icon={<TrendingUp size={22} />}
-            color={stats.todayProfit >= 0 ? 'green' : 'red'}
-          />
-          <SummaryCard
-            title="Monthly Profit"
-            value={formatCurrency(stats.monthProfit)}
-            icon={<BarChart3 size={22} />}
-            color={stats.monthProfit >= 0 ? 'green' : 'red'}
-          />
-          <SummaryCard
-            title="Yearly Profit"
-            value={formatCurrency(stats.yearProfit)}
-            icon={<TrendingUp size={22} />}
-            color={stats.yearProfit >= 0 ? 'green' : 'red'}
-          />
-        </div>
-
         {/* Today's Activity */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <SummaryCard
@@ -238,99 +177,6 @@ export function DashboardPage() {
             color="red"
             trendLabel={`${stats.todayPurchasesCount} purchase(s)`}
           />
-        </div>
-
-        {/* Charts */}
-        {profitTrend.length > 0 ? (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <div className="surface rounded-2xl p-5">
-              <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-4">Monthly Profit Trend</h3>
-              <ResponsiveContainer width="100%" height={250}>
-                <AreaChart data={profitTrend}>
-                  <defs>
-                    <linearGradient id="profitGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#34d399" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="#34d399" stopOpacity={0} />
-                    </linearGradient>
-                    <linearGradient id="lossGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#f87171" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="#f87171" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <XAxis dataKey="month" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '0.75rem', fontSize: 12 }}
-                    labelStyle={{ color: '#e2e8f0' }}
-                    formatter={(value) => formatCurrency(Number(value ?? 0))}
-                  />
-                  <Area type="monotone" dataKey="profit" stroke="#34d399" fill="url(#profitGrad)" strokeWidth={2} name="Profit" />
-                  <Area type="monotone" dataKey="loss" stroke="#f87171" fill="url(#lossGrad)" strokeWidth={2} name="Loss" />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="surface rounded-2xl p-5">
-              <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-4">Revenue vs Cost</h3>
-              <ResponsiveContainer width="100%" height={250}>
-                <BarChart data={profitTrend}>
-                  <XAxis dataKey="month" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '0.75rem', fontSize: 12 }}
-                    labelStyle={{ color: '#e2e8f0' }}
-                    formatter={(value) => formatCurrency(Number(value ?? 0))}
-                  />
-                  <Bar dataKey="revenue" fill="#3b82f6" radius={[4, 4, 0, 0]} name="Revenue" />
-                  <Bar dataKey="cost" fill="#f59e0b" radius={[4, 4, 0, 0]} name="Cost" />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        ) : (
-          <div className="surface rounded-2xl p-8 text-center">
-            <BarChart3 size={32} className="text-slate-500 mx-auto mb-3" />
-            <p className="text-sm text-slate-400">No chart data yet. Create invoices to see profit trends and revenue charts.</p>
-          </div>
-        )}
-
-        {/* Top Profit & Loss Invoices */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {topProfit.length > 0 && (
-            <div className="surface rounded-2xl p-5">
-              <h3 className="text-sm font-semibold text-emerald-300 uppercase tracking-wider mb-3 flex items-center gap-2">
-                <TrendingUp size={16} /> Top Profit Invoices
-              </h3>
-              <div className="space-y-2">
-                {topProfit.map((s) => (
-                  <div key={s.id} className="flex items-center justify-between p-3 rounded-xl bg-emerald-950/20 border border-emerald-900/30">
-                    <div>
-                      <p className="text-sm font-medium text-slate-100">{s.customer_name}</p>
-                      <p className="text-xs text-slate-400">{s.invoice_number}</p>
-                    </div>
-                    <span className="text-sm font-bold text-emerald-300">+{formatCurrency(s.total_profit)}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          {topLoss.length > 0 && (
-            <div className="surface rounded-2xl p-5">
-              <h3 className="text-sm font-semibold text-red-300 uppercase tracking-wider mb-3 flex items-center gap-2">
-                <TrendingDown size={16} /> Top Loss Invoices
-              </h3>
-              <div className="space-y-2">
-                {topLoss.map((s) => (
-                  <div key={s.id} className="flex items-center justify-between p-3 rounded-xl bg-red-950/20 border border-red-900/30">
-                    <div>
-                      <p className="text-sm font-medium text-slate-100">{s.customer_name}</p>
-                      <p className="text-xs text-slate-400">{s.invoice_number}</p>
-                    </div>
-                    <span className="text-sm font-bold text-red-300">{formatCurrency(s.total_profit)}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Quick Actions */}

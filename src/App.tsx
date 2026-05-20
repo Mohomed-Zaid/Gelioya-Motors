@@ -8,7 +8,6 @@ import { ReceivablesPage } from './pages/ReceivablesPage'
 import { PayablesPage } from './pages/PayablesPage'
 import { CashLedgerPage } from './pages/CashLedgerPage'
 import { ExpensesPage } from './pages/ExpensesPage'
-import { ProfitLossPage } from './pages/ProfitLossPage'
 import { ReportsPage } from './pages/ReportsPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { PartiesPage } from './pages/PartiesPage'
@@ -16,6 +15,8 @@ import { SetupPage } from './pages/SetupPage'
 import { LoginPage } from './pages/LoginPage'
 import { LandingPage } from './pages/LandingPage'
 import { ReturnsPage } from './pages/ReturnsPage'
+import { AdminPage } from './pages/AdminPage'
+import { ManualProfitLossPage } from './pages/ManualProfitLossPage'
 
 function App() {
   return (
@@ -34,9 +35,10 @@ function App() {
           <Route path="/parties" element={<ProtectedRoute><PartiesPage /></ProtectedRoute>} />
           <Route path="/cash-ledger" element={<ProtectedRoute><CashLedgerPage /></ProtectedRoute>} />
           <Route path="/expenses" element={<ProtectedRoute><ExpensesPage /></ProtectedRoute>} />
-          <Route path="/profit-loss" element={<ProtectedRoute><ProfitLossPage /></ProtectedRoute>} />
+          <Route path="/manual-profit-loss" element={<ProtectedRoute><ManualProfitLossPage /></ProtectedRoute>} />
           <Route path="/reports" element={<ProtectedRoute><ReportsPage /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
+          <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </BrowserRouter>

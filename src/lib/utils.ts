@@ -42,6 +42,12 @@ export function todayISO(): string {
   return new Date().toISOString().split('T')[0]
 }
 
+export function tomorrowISO(): string {
+  const tomorrow = new Date()
+  tomorrow.setDate(tomorrow.getDate() + 1)
+  return tomorrow.toISOString().split('T')[0]
+}
+
 export function generateInvoiceNumber(prefix: string, seq: number): string {
   const date = new Date()
   const yy = String(date.getFullYear()).slice(-2)
@@ -54,4 +60,17 @@ export function getMonthRange(date: Date): { start: string; end: string } {
   const start = new Date(date.getFullYear(), date.getMonth(), 1).toISOString()
   const end = new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59).toISOString()
   return { start, end }
+}
+
+export function formatChequeNumber(value: string): string {
+  // Remove all non-digit characters
+  const digits = value.replace(/\D/g, '')
+  // Format as XXXXXX-XXXX-XXX (6-4-3)
+  if (digits.length <= 6) return digits
+  if (digits.length <= 10) return `${digits.slice(0, 6)}-${digits.slice(6)}`
+  return `${digits.slice(0, 6)}-${digits.slice(6, 10)}-${digits.slice(10, 13)}`
+}
+
+export function parseChequeNumber(value: string): string {
+  return value.replace(/\D/g, '')
 }

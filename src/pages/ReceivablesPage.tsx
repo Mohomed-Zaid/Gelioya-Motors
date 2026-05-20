@@ -3,10 +3,10 @@ import { HandCoins, Plus, Search, Pencil, Trash2, ChevronDown, ChevronUp, Users,
 import { AppShell } from '../layout/AppShell'
 import { Modal } from '../components/Modal'
 import { SummaryCard } from '../components/SummaryCard'
-import { getReceivables, collectReceivablePayment, deleteReceivablePayment, updateSale, deleteSale, getPartyOffsets, createSale, getParties } from '../services/businessService'
+import { getReceivables, collectReceivablePayment, deleteReceivablePayment, updateSale, deleteSale, getPartyOffsets, createSale, getParties, clearReceivableCheque, getNextNumber, createPartyIfMissing, updateLedger, getLedger, getClient, getReceivablePayments } from '../services/businessService'
 import type { ReceivableWithSale, PaymentType, SaleItemInput, Party } from '../types'
 import type { PartyOffsetWithPurchase } from '../services/businessService'
-import { formatCurrency, formatDate, parseCurrencyInput, todayISO } from '../lib/utils'
+import { formatCurrency, formatDate, parseCurrencyInput, todayISO, formatChequeNumber, parseChequeNumber, generateInvoiceNumber } from '../lib/utils'
 import { CurrencyInput } from '../components/CurrencyInput'
 import { PartyCombobox } from '../components/PartyCombobox'
 
@@ -37,12 +37,14 @@ function newReceivableItem(): DraftReceivableItem {
 
 export function ReceivablesPage() {
   const [receivables, setReceivables] = useState<ReceivableWithSale[]>([])
+  const [receivablePayments, setReceivablePayments] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [showPaymentModal, setShowPaymentModal] = useState(false)
   const [selectedReceivable, setSelectedReceivable] = useState<ReceivableWithSale | null>(null)
   const [showDeletePaymentConfirm, setShowDeletePaymentConfirm] = useState<string | null>(null)
   const [showDeleteSaleConfirm, setShowDeleteSaleConfirm] = useState<string | null>(null)
   const [showEditModal, setShowEditModal] = useState(false)
+  const [clearingCheque, setClearingCheque] = useState<string | null>(null)
   const [editReceivable, setEditReceivable] = useState<ReceivableWithSale | null>(null)
   const [editCustomerName, setEditCustomerName] = useState('')
   const [editTotalSales, setEditTotalSales] = useState('')
@@ -89,6 +91,8 @@ export function ReceivablesPage() {
     try {
       const data = await getReceivables()
       setReceivables(data)
+      const payments = await getReceivablePayments()
+      setReceivablePayments(payments)
     } catch (err) {
       console.error(err)
     } finally {
@@ -261,6 +265,20 @@ export function ReceivablesPage() {
     }
   }
 
+  const handleClearCheque = async (paymentId: string) => {
+    if (!confirm('Clear this cheque? This will move the amount from On Cheque to Cash in Hand.')) return
+    setClearingCheque(paymentId)
+    try {
+      await clearReceivableCheque(paymentId)
+      await loadReceivables()
+    } catch (err) {
+      console.error(err)
+      alert(err instanceof Error ? err.message : 'Failed to clear cheque.')
+    } finally {
+      setClearingCheque(null)
+    }
+  }
+
   const filtered = receivables.filter(
     (r) => r.customer_name.toLowerCase().includes(search.toLowerCase()) || r.invoice_number.toLowerCase().includes(search.toLowerCase())
   )
@@ -339,6 +357,37 @@ export function ReceivablesPage() {
           remaining -= payForThis
         }
       }
+
+      // If there's remaining amount after paying all outstanding, create payable entry
+      if (remaining > 0) {
+        const nextSeq = await getNextNumber('purchases', 'purchase_number', 'PO')
+        const purchaseNumber = generateInvoiceNumber('PO', nextSeq)
+        
+        // Get party_id from first receivable if exists
+        let partyId = sorted[0]?.party_id || null
+        if (!partyId && payAllCustomer.customerName.trim()) {
+          partyId = await createPartyIfMissing(payAllCustomer.customerName)
+        }
+
+        const { error: payableError } = await getClient()
+          .from('purchases')
+          .insert({
+            purchase_number: purchaseNumber,
+            supplier_name: payAllCustomer.customerName.trim(),
+            party_id: partyId,
+            total_amount: remaining,
+            payment_type: 'credit',
+            notes: `Overpayment from Pay All - ${payAllCustomer.customerName}`,
+          })
+        if (payableError) throw payableError
+
+        // Update ledger: increase payables_total
+        const ledger = await getLedger()
+        await updateLedger({
+          payables_total: ledger!.payables_total + remaining,
+        })
+      }
+
       setShowPayAllModal(false)
       loadReceivables()
     } catch (err: unknown) {
@@ -371,6 +420,36 @@ export function ReceivablesPage() {
           <SummaryCard title="Total Credit Sales" value={formatCurrency(totalReceivable)} icon={<HandCoins size={20} />} color="amber" />
           <SummaryCard title="Total Overpaid" value={formatCurrency(totalOverpaid)} icon={<span className="text-xs font-bold">OVER</span>} color="purple" />
         </div>
+
+        {/* Pending Cheques Section */}
+        {receivablePayments.filter(p => p.method === 'cheque' && p.cheque_status === 'pending').length > 0 && (
+          <div className="surface rounded-2xl p-4">
+            <h3 className="text-sm font-bold text-slate-200 mb-3 flex items-center gap-2">
+              <FileText size={16} /> Pending Cheques ({receivablePayments.filter(p => p.method === 'cheque' && p.cheque_status === 'pending').length})
+            </h3>
+            <div className="space-y-2">
+              {receivablePayments
+                .filter(p => p.method === 'cheque' && p.cheque_status === 'pending')
+                .map(payment => (
+                  <div key={payment.id} className="flex items-center justify-between p-3 bg-blue-950/20 border border-blue-900/30 rounded-xl">
+                    <div className="flex-1">
+                      <div className="text-sm font-medium text-slate-200">{payment.customer_name}</div>
+                      <div className="text-xs text-slate-400">
+                        {formatCurrency(payment.amount)} · {payment.cheque_number ? formatChequeNumber(payment.cheque_number) : 'No cheque number'} · {formatDate(payment.payment_date || payment.created_at)}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleClearCheque(payment.id)}
+                      disabled={clearingCheque === payment.id}
+                      className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500/15 text-emerald-200 border border-emerald-900/40 hover:bg-emerald-500/25 transition-all disabled:opacity-50"
+                    >
+                      {clearingCheque === payment.id ? 'Clearing...' : 'Clear'}
+                    </button>
+                  </div>
+                ))}
+            </div>
+          </div>
+        )}
 
         <div className="surface rounded-2xl p-4">
           <div className="flex flex-col sm:flex-row gap-3">
@@ -706,15 +785,29 @@ export function ReceivablesPage() {
                                   <span className="text-slate-400 ml-2">{formatDate(p.created_at)}</span>
                                   <span className="text-amber-200 ml-2 font-mono text-xs">{p.invoiceNumber}</span>
                                   {p.method && <span className="text-slate-500 ml-2 text-xs">({p.method})</span>}
+                                  {p.method === 'cheque' && p.cheque_number && <span className="text-blue-300 ml-2 font-mono text-xs">{formatChequeNumber(p.cheque_number)}</span>}
+                                  {p.method === 'cheque' && p.cheque_status && <span className={`ml-2 text-xs font-semibold ${p.cheque_status === 'cleared' ? 'text-green-400' : 'text-yellow-400'}`}>{p.cheque_status.toUpperCase()}</span>}
                                   {p.notes && <span className="text-slate-500 ml-2">· {p.notes}</span>}
                                 </div>
-                                <button
-                                  onClick={() => setShowDeletePaymentConfirm(p.id)}
-                                  className="p-1 rounded text-slate-500 hover:text-red-300 hover:bg-red-950/40 transition-all"
-                                  title="Delete Payment"
-                                >
-                                  <Trash2 size={12} />
-                                </button>
+                                <div className="flex items-center gap-1">
+                                  {p.method === 'cheque' && p.cheque_status === 'pending' && (
+                                    <button
+                                      onClick={() => handleClearCheque(p.id)}
+                                      disabled={clearingCheque === p.id}
+                                      className="p-1 rounded text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/40 transition-all"
+                                      title="Clear Cheque"
+                                    >
+                                      <FileText size={12} />
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={() => setShowDeletePaymentConfirm(p.id)}
+                                    className="p-1 rounded text-slate-500 hover:text-red-300 hover:bg-red-950/40 transition-all"
+                                    title="Delete Payment"
+                                  >
+                                    <Trash2 size={12} />
+                                  </button>
+                                </div>
                               </div>
                             ))}
                           </div>
@@ -830,10 +923,11 @@ export function ReceivablesPage() {
                     <label className="block text-xs font-semibold text-slate-300 mb-1">Cheque Number</label>
                     <input
                       type="text"
-                      value={chequeNumber}
-                      onChange={(e) => setChequeNumber(e.target.value)}
+                      value={formatChequeNumber(chequeNumber)}
+                      onChange={(e) => setChequeNumber(parseChequeNumber(e.target.value))}
+                      placeholder="XXXXXX-XXXX-XXX"
+                      maxLength={15}
                       className="w-full px-4 py-2.5 input-surface rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
-                      placeholder="Enter cheque number"
                     />
                   </div>
                 </div>
@@ -1141,10 +1235,11 @@ export function ReceivablesPage() {
                     <label className="block text-xs font-semibold text-slate-300 mb-1">Cheque Number</label>
                     <input
                       type="text"
-                      value={payAllChequeNumber}
-                      onChange={(e) => setPayAllChequeNumber(e.target.value)}
+                      value={formatChequeNumber(payAllChequeNumber)}
+                      onChange={(e) => setPayAllChequeNumber(parseChequeNumber(e.target.value))}
+                      placeholder="XXXXXX-XXXX-XXX"
+                      maxLength={15}
                       className="w-full px-4 py-2.5 input-surface rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
-                      placeholder="Enter cheque number"
                     />
                   </div>
                 </div>

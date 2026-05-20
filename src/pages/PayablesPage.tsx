@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react'
-import { HandCoins, Search, Trash2, ChevronDown, ChevronUp } from 'lucide-react'
+import { HandCoins, Search, Trash2, ChevronDown, ChevronUp, FileText } from 'lucide-react'
 import { AppShell } from '../layout/AppShell'
 import { Modal } from '../components/Modal'
 import { SummaryCard } from '../components/SummaryCard'
-import { getPayables, createPayablePayment, deletePayablePayment, getPartyOffsets } from '../services/businessService'
+import { getPayables, createPayablePayment, deletePayablePayment, getPartyOffsets, clearPayableCheque } from '../services/businessService'
 import type { PayableWithPurchase } from '../types'
 import type { PartyOffsetWithPurchase } from '../services/businessService'
-import { formatCurrency, formatDate } from '../lib/utils'
+import { formatCurrency, formatDate, formatChequeNumber, parseChequeNumber } from '../lib/utils'
 import { CurrencyInput } from '../components/CurrencyInput'
 
 export function PayablesPage() {
@@ -15,12 +15,17 @@ export function PayablesPage() {
   const [showPaymentModal, setShowPaymentModal] = useState(false)
   const [selectedPayable, setSelectedPayable] = useState<PayableWithPurchase | null>(null)
   const [showDeletePaymentConfirm, setShowDeletePaymentConfirm] = useState<string | null>(null)
+  const [clearingCheque, setClearingCheque] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
   const [paymentAmount, setPaymentAmount] = useState('')
   const [paymentNotes, setPaymentNotes] = useState('')
+  const [paymentDate, setPaymentDate] = useState('')
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'cheque' | 'bank' | 'other'>('cash')
+  const [chequeDate, setChequeDate] = useState('')
+  const [chequeNumber, setChequeNumber] = useState('')
   const [expandedPayable, setExpandedPayable] = useState<string | null>(null)
   const [offsetDetails, setOffsetDetails] = useState<Record<string, PartyOffsetWithPurchase[]>>({})
 
@@ -43,6 +48,10 @@ export function PayablesPage() {
     setSelectedPayable(payable)
     setPaymentAmount('')
     setPaymentNotes('')
+    setPaymentDate(new Date().toISOString().slice(0, 10))
+    setPaymentMethod('cash')
+    setChequeDate('')
+    setChequeNumber('')
     setError('')
     setShowPaymentModal(true)
   }
@@ -64,6 +73,10 @@ export function PayablesPage() {
       await createPayablePayment({
         purchase_id: selectedPayable.id,
         supplier_name: selectedPayable.supplier_name,
+        payment_date: paymentDate,
+        method: paymentMethod,
+        cheque_date: paymentMethod === 'cheque' ? chequeDate || undefined : undefined,
+        cheque_number: paymentMethod === 'cheque' ? chequeNumber || undefined : undefined,
         amount,
         notes: paymentNotes || undefined,
       })
@@ -73,6 +86,20 @@ export function PayablesPage() {
       setError(err instanceof Error ? err.message : 'Failed to record payment.')
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  const handleClearCheque = async (paymentId: string) => {
+    if (!confirm('Clear this cheque? This will move the amount from On Cheque to Cash in Hand.')) return
+    setClearingCheque(paymentId)
+    try {
+      await clearPayableCheque(paymentId)
+      await loadPayables()
+    } catch (err) {
+      console.error(err)
+      alert(err instanceof Error ? err.message : 'Failed to clear cheque.')
+    } finally {
+      setClearingCheque(null)
     }
   }
 
@@ -283,15 +310,30 @@ export function PayablesPage() {
                       <div className="text-sm">
                         <span className="text-emerald-300 font-semibold">{formatCurrency(p.amount)}</span>
                         <span className="text-slate-400 ml-2">{formatDate(p.created_at)}</span>
+                        {p.method && <span className="text-slate-500 ml-2 text-xs">({p.method})</span>}
+                        {p.method === 'cheque' && p.cheque_number && <span className="text-blue-300 ml-2 font-mono text-xs">{formatChequeNumber(p.cheque_number)}</span>}
+                        {p.method === 'cheque' && p.cheque_status && <span className={`ml-2 text-xs font-semibold ${p.cheque_status === 'cleared' ? 'text-green-400' : 'text-yellow-400'}`}>{p.cheque_status.toUpperCase()}</span>}
                         {p.notes && <span className="text-slate-500 ml-2">· {p.notes}</span>}
                       </div>
-                      <button
-                        onClick={() => setShowDeletePaymentConfirm(p.id)}
-                        className="p-1 rounded text-slate-500 hover:text-red-300 hover:bg-red-950/40 transition-all"
-                        title="Delete Payment"
-                      >
-                        <Trash2 size={12} />
-                      </button>
+                      <div className="flex items-center gap-1">
+                        {p.method === 'cheque' && p.cheque_status === 'pending' && (
+                          <button
+                            onClick={() => handleClearCheque(p.id)}
+                            disabled={clearingCheque === p.id}
+                            className="p-1 rounded text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/40 transition-all"
+                            title="Clear Cheque"
+                          >
+                            <FileText size={12} />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => setShowDeletePaymentConfirm(p.id)}
+                          className="p-1 rounded text-slate-500 hover:text-red-300 hover:bg-red-950/40 transition-all"
+                          title="Delete Payment"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -310,6 +352,78 @@ export function PayablesPage() {
                 required
               />
             </div>
+
+            <div>
+              <label className="block text-sm font-semibold text-slate-200 mb-1.5">Payment Date</label>
+              <input
+                type="date"
+                value={paymentDate}
+                onChange={(e) => setPaymentDate(e.target.value)}
+                className="w-full px-4 py-3 input-surface rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold text-slate-200 mb-1.5">Method</label>
+              <div className="grid grid-cols-4 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod('cash')}
+                  className={`w-full h-[54px] px-3.5 rounded-xl text-xs font-semibold border transition-all ${paymentMethod === 'cash' ? 'bg-emerald-500/15 border-emerald-900/40 text-emerald-200' : 'border-emerald-900/30 text-slate-300 hover:bg-emerald-950/30'}`}
+                >
+                  CASH
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod('cheque')}
+                  className={`w-full h-[54px] px-3.5 rounded-xl text-xs font-semibold border transition-all ${paymentMethod === 'cheque' ? 'bg-emerald-500/15 border-emerald-900/40 text-emerald-200' : 'border-emerald-900/30 text-slate-300 hover:bg-emerald-950/30'}`}
+                >
+                  CHEQUE
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod('bank')}
+                  className={`w-full h-[54px] px-3.5 rounded-xl text-xs font-semibold border transition-all ${paymentMethod === 'bank' ? 'bg-emerald-500/15 border-emerald-900/40 text-emerald-200' : 'border-emerald-900/30 text-slate-300 hover:bg-emerald-950/30'}`}
+                >
+                  BANK
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod('other')}
+                  className={`w-full h-[54px] px-3.5 rounded-xl text-xs font-semibold border transition-all ${paymentMethod === 'other' ? 'bg-emerald-500/15 border-emerald-900/40 text-emerald-200' : 'border-emerald-900/30 text-slate-300 hover:bg-emerald-950/30'}`}
+                >
+                  OTHER
+                </button>
+              </div>
+            </div>
+
+            {paymentMethod === 'cheque' && (
+              <div className="surface-2 rounded-xl p-4 space-y-3 border border-emerald-900/20">
+                <div className="text-sm font-semibold text-slate-100">Cheque</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Cheque Date</label>
+                    <input
+                      type="date"
+                      value={chequeDate}
+                      onChange={(e) => setChequeDate(e.target.value)}
+                      className="w-full px-4 py-2.5 input-surface rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Cheque Number</label>
+                    <input
+                      type="text"
+                      value={formatChequeNumber(chequeNumber)}
+                      onChange={(e) => setChequeNumber(parseChequeNumber(e.target.value))}
+                      placeholder="XXXXXX-XXXX-XXX"
+                      maxLength={15}
+                      className="w-full px-4 py-2.5 input-surface rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div>
               <label className="block text-sm font-semibold text-slate-200 mb-1.5">Notes (optional)</label>

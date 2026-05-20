@@ -3,9 +3,9 @@ import { ShoppingCart, Plus, Search, FileText, Pencil, Trash2, X, ChevronDown, C
 import { AppShell } from '../layout/AppShell'
 import { Modal } from '../components/Modal'
 import { SummaryCard } from '../components/SummaryCard'
-import { createSale, updateSale, deleteSale, getSales, getParties } from '../services/businessService'
+import { createSale, updateSale, deleteSale, getSales, getParties, confirmChequeSale } from '../services/businessService'
 import type { Sale, SaleItemInput, PaymentType, Party } from '../types'
-import { formatCurrency, formatDate, parseCurrencyInput, todayISO } from '../lib/utils'
+import { formatCurrency, formatDate, parseCurrencyInput, todayISO, tomorrowISO } from '../lib/utils'
 import { CurrencyInput } from '../components/CurrencyInput'
 import { PartyCombobox } from '../components/PartyCombobox'
 
@@ -17,6 +17,10 @@ interface DraftItem {
   selling_price: string
 }
 
+type EntryMode = 'book' | 'lines'
+
+const BOOK_ENTRY_DEFAULT = 'Book entry'
+
 let itemKeyCounter = 0
 function newItem(): DraftItem {
   return { key: `item-${++itemKeyCounter}`, item_name: '', quantity: '1', cost_price: '', selling_price: '' }
@@ -26,6 +30,14 @@ function calcItemProfit(item: DraftItem): number {
   const qty = parseInt(item.quantity) || 1
   const cp = item.cost_price.trim() !== '' ? (parseFloat(item.cost_price) || 0) : 0
   return (parseFloat(item.selling_price) || 0) * qty - cp * qty
+}
+
+/** Parses money with optional leading minus (for manual profit / loss). */
+function parseSignedMoney(s: string): number {
+  const t = s.trim().replace(/[^0-9.-]/g, '')
+  if (t === '' || t === '-') return 0
+  const n = parseFloat(t)
+  return Number.isFinite(n) ? n : 0
 }
 
 export function SalesPage() {
@@ -40,15 +52,21 @@ export function SalesPage() {
   const [dateTo, setDateTo] = useState('')
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [confirmingCheque, setConfirmingCheque] = useState<string | null>(null)
 
   // Form state
   const [customerName, setCustomerName] = useState('')
   const [partyId, setPartyId] = useState<string | null>(null)
   const [parties, setParties] = useState<Party[]>([])
-  const [invoiceDate, setInvoiceDate] = useState(todayISO())
+  const [invoiceDate, setInvoiceDate] = useState(tomorrowISO())
   const [paymentType, setPaymentType] = useState<PaymentType>('cash')
   const [notes, setNotes] = useState('')
   const [items, setItems] = useState<DraftItem[]>([newItem()])
+  const [entryMode, setEntryMode] = useState<EntryMode>('book')
+  const [bookLineLabel, setBookLineLabel] = useState(BOOK_ENTRY_DEFAULT)
+  const [bookCost, setBookCost] = useState('')
+  const [bookPrice, setBookPrice] = useState('')
+  const [bookProfit, setBookProfit] = useState('')
 
   const loadSales = async () => {
     try {
@@ -79,6 +97,11 @@ export function SalesPage() {
     setPaymentType('cash')
     setNotes('')
     setItems([newItem()])
+    setEntryMode('book')
+    setBookLineLabel(BOOK_ENTRY_DEFAULT)
+    setBookCost('')
+    setBookPrice('')
+    setBookProfit('')
     setError('')
     setEditingSale(null)
   }
@@ -91,16 +114,57 @@ export function SalesPage() {
     setPaymentType(sale.payment_type)
     setNotes(sale.notes || '')
     setError('')
-    const saleItems = sale.sale_items && sale.sale_items.length > 0
-      ? sale.sale_items.map((si) => ({ key: `item-${++itemKeyCounter}`, item_name: si.item_name, quantity: String(si.quantity || 1), cost_price: si.cost_price > 0 ? String(si.cost_price / (si.quantity || 1)) : '', selling_price: String(si.selling_price / (si.quantity || 1)) }))
-      : [{ key: `item-${++itemKeyCounter}`, item_name: '', quantity: '1', cost_price: sale.total_cost > 0 ? String(sale.total_cost) : '', selling_price: String(sale.total_sales) }]
-    setItems(saleItems)
+    const sis = sale.sale_items && sale.sale_items.length > 0 ? sale.sale_items : null
+    if (sis && sis.length === 1) {
+      const si = sis[0]
+      setEntryMode('book')
+      setBookLineLabel(si.item_name?.trim() || BOOK_ENTRY_DEFAULT)
+      setBookCost(si.cost_price > 0 ? String(si.cost_price) : '')
+      setBookPrice(String(si.selling_price))
+      setBookProfit(String(si.profit))
+      setItems([newItem()])
+    } else {
+      setEntryMode('lines')
+      setBookLineLabel(BOOK_ENTRY_DEFAULT)
+      setBookCost('')
+      setBookPrice('')
+      setBookProfit('')
+      const saleItems = sis
+        ? sis.map((si) => ({
+            key: `item-${++itemKeyCounter}`,
+            item_name: si.item_name,
+            quantity: String(si.quantity || 1),
+            cost_price: si.cost_price > 0 ? String(si.cost_price / (si.quantity || 1)) : '',
+            selling_price: String(si.selling_price / (si.quantity || 1)),
+          }))
+        : [{ key: `item-${++itemKeyCounter}`, item_name: '', quantity: '1', cost_price: sale.total_cost > 0 ? String(sale.total_cost) : '', selling_price: String(sale.total_sales) }]
+      setItems(saleItems)
+    }
     setMode('entry')
   }
 
   const openCreateModal = () => {
     resetForm()
     setMode('entry')
+  }
+
+  const handleConfirmCheque = async (saleId: string) => {
+    if (!confirm('Confirm this cheque sale? This will transfer the amount to Cash in Hand.')) return
+    setConfirmingCheque(saleId)
+    try {
+      console.log('Confirming cheque sale:', saleId)
+      await confirmChequeSale(saleId)
+      console.log('Cheque confirmed successfully, reloading sales...')
+      await loadSales()
+      console.log('Sales reloaded successfully')
+    } catch (err) {
+      console.error('Error confirming cheque sale:', err)
+      // Check if the confirmation actually succeeded by checking if the error is from loadSales
+      const errorMessage = err instanceof Error ? err.message : 'Failed to confirm cheque sale.'
+      alert(errorMessage)
+    } finally {
+      setConfirmingCheque(null)
+    }
   }
 
   // Item management
@@ -127,34 +191,90 @@ export function SalesPage() {
   const totalSales = items.reduce((sum, item) => sum + (parseFloat(item.selling_price) || 0) * (parseInt(item.quantity) || 1), 0)
   const totalProfit = totalSales - totalCost
 
+  const bookCostNum = parseCurrencyInput(bookCost)
+  const bookPriceNum = parseCurrencyInput(bookPrice)
+  const bookProfitNum = parseSignedMoney(bookProfit)
+  const bookSuggestedProfit = bookPriceNum - bookCostNum
+
+  const switchToLinesMode = () => {
+    if (entryMode === 'lines') return
+    const calc = bookPriceNum - bookCostNum
+    if (Math.abs(bookProfitNum - calc) > 0.02) {
+      if (!confirm('Line items mode calculates profit as selling price minus cost on each row. Your typed profit will not carry over exactly—continue?')) return
+    }
+    const label = bookLineLabel.trim() || BOOK_ENTRY_DEFAULT
+    setItems([
+      {
+        key: `item-${++itemKeyCounter}`,
+        item_name: label,
+        quantity: '1',
+        cost_price: bookCostNum > 0 ? String(bookCostNum) : '',
+        selling_price: bookPriceNum > 0 ? String(bookPriceNum) : '',
+      },
+    ])
+    setEntryMode('lines')
+  }
+
+  const switchToBookMode = () => {
+    if (entryMode === 'book') return
+    setBookLineLabel(items[0]?.item_name?.trim() || BOOK_ENTRY_DEFAULT)
+    setBookCost(totalCost > 0 ? String(totalCost) : '')
+    setBookPrice(totalSales > 0 ? String(totalSales) : '')
+    setBookProfit(String(totalProfit))
+    setEntryMode('book')
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
 
     if (!customerName.trim()) { setError('Customer name is required.'); return }
-    if (items.length === 0) { setError('Add at least one item.'); return }
 
-    const hasEmpty = items.some((item) => !item.item_name.trim())
-    if (hasEmpty) { setError('Item name is required for all rows.'); return }
+    let saleItems: SaleItemInput[]
+    let inputTotalCost: number
+    let inputTotalSales: number
+    let inputTotalProfit: number
 
-    const saleItems: SaleItemInput[] = items.map((item) => {
-      const qty = parseInt(item.quantity) || 1
-      const cp = item.cost_price.trim() !== '' ? parseFloat(item.cost_price) || 0 : 0
-      const sp = parseFloat(item.selling_price) || 0
-      return {
-        item_name: item.item_name,
-        quantity: qty,
-        cost_price: cp * qty,
-        selling_price: sp * qty,
-        profit: sp * qty - cp * qty,
-      }
-    })
+    if (entryMode === 'book') {
+      if (bookPriceNum <= 0) { setError('Selling price (invoice total) must be greater than zero.'); return }
+      if (bookCostNum < 0) { setError('Book cost cannot be negative.'); return }
+      const lineName = bookLineLabel.trim() || BOOK_ENTRY_DEFAULT
+      inputTotalCost = bookCostNum
+      inputTotalSales = bookPriceNum
+      inputTotalProfit = bookProfitNum
+      saleItems = [
+        {
+          item_name: lineName,
+          quantity: 1,
+          cost_price: bookCostNum,
+          selling_price: bookPriceNum,
+          profit: bookProfitNum,
+        },
+      ]
+    } else {
+      if (items.length === 0) { setError('Add at least one item.'); return }
+      const hasEmpty = items.some((item) => !item.item_name.trim())
+      if (hasEmpty) { setError('Item name is required for all rows.'); return }
 
-    const inputTotalCost = saleItems.reduce((sum, i) => sum + i.cost_price, 0)
-    const inputTotalSales = saleItems.reduce((sum, i) => sum + i.selling_price, 0)
-    const inputTotalProfit = saleItems.reduce((sum, i) => sum + i.profit, 0)
+      saleItems = items.map((item) => {
+        const qty = parseInt(item.quantity) || 1
+        const cp = item.cost_price.trim() !== '' ? parseFloat(item.cost_price) || 0 : 0
+        const sp = parseFloat(item.selling_price) || 0
+        return {
+          item_name: item.item_name,
+          quantity: qty,
+          cost_price: cp * qty,
+          selling_price: sp * qty,
+          profit: sp * qty - cp * qty,
+        }
+      })
 
-    if (inputTotalSales <= 0) { setError('Total selling price must be greater than zero.'); return }
+      inputTotalCost = saleItems.reduce((sum, i) => sum + i.cost_price, 0)
+      inputTotalSales = saleItems.reduce((sum, i) => sum + i.selling_price, 0)
+      inputTotalProfit = saleItems.reduce((sum, i) => sum + i.profit, 0)
+
+      if (inputTotalSales <= 0) { setError('Total selling price must be greater than zero.'); return }
+    }
 
     setSubmitting(true)
     try {
@@ -307,10 +427,26 @@ export function SalesPage() {
                           }`}>
                             {sale.payment_type === 'chequesale' ? 'Cheque' : sale.payment_type}
                           </span>
+                          {sale.payment_type === 'credit' && sale.is_finalized === false && (
+                            <span className="block text-[10px] text-amber-400/90 mt-1 font-medium">Open credit</span>
+                          )}
+                          {sale.payment_type === 'chequesale' && sale.cheque_confirmed === false && (
+                            <span className="block text-[10px] text-yellow-400/90 mt-1 font-medium">Pending</span>
+                          )}
                         </td>
                         <td className="px-5 py-3.5 text-slate-400">{formatDate(sale.invoice_date || sale.created_at)}</td>
                         <td className="px-5 py-3.5 text-center">
                           <div className="flex items-center justify-center gap-1">
+                            {sale.payment_type === 'chequesale' && sale.cheque_confirmed === false && (
+                              <button
+                                onClick={() => handleConfirmCheque(sale.id)}
+                                disabled={confirmingCheque === sale.id}
+                                className="p-1.5 rounded-lg text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/40 transition-all"
+                                title="Confirm Cheque"
+                              >
+                                <FileText size={14} />
+                              </button>
+                            )}
                             <button
                               onClick={() => openEditModal(sale)}
                               className="p-1.5 rounded-lg text-slate-400 hover:text-emerald-300 hover:bg-emerald-950/40 transition-all"
@@ -423,7 +559,9 @@ export function SalesPage() {
                       <BookOpen size={24} className="text-emerald-400" />
                       {editingSale ? 'Edit Invoice' : 'Sales Ledger'}
                     </h1>
-                    <p className="text-sm text-slate-400 mt-0.5">{editingSale ? 'Modify invoice entries' : 'Enter items manually like a sales book'}</p>
+                    <p className="text-sm text-slate-400 mt-0.5">
+                      {editingSale ? 'Modify invoice entries' : 'Book totals: type cost, price, and profit yourself. Or use line items for per-row math.'}
+                    </p>
                   </div>
                 </div>
 
@@ -477,7 +615,130 @@ export function SalesPage() {
                   </div>
                 </div>
 
-                {/* Ledger Table */}
+                {/* Entry style: manual book totals vs line items */}
+                <div className="surface rounded-2xl p-4 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                  <div className="flex rounded-xl border border-emerald-900/40 p-1 bg-slate-950/50 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (entryMode !== 'book') switchToBookMode()
+                      }}
+                      className={`px-4 py-2.5 rounded-lg text-sm font-semibold transition-colors ${
+                        entryMode === 'book' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Book totals (manual)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (entryMode !== 'lines') switchToLinesMode()
+                      }}
+                      className={`px-4 py-2.5 rounded-lg text-sm font-semibold transition-colors ${
+                        entryMode === 'lines' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Line items
+                    </button>
+                  </div>
+                  <p className="text-xs text-slate-500 leading-relaxed max-w-xl">
+                    <strong className="text-slate-400">Book totals:</strong> enter book cost, selling price (invoice total), and profit or loss exactly as in your ledger—saved as you type them.
+                    <span className="text-slate-600"> · </span>
+                    <strong className="text-slate-400">Line items:</strong> profit on each row is selling price minus cost (quantity × unit prices).
+                  </p>
+                </div>
+
+                {entryMode === 'book' ? (
+                  <div className="surface rounded-2xl overflow-hidden">
+                    <div className="bg-emerald-950/40 px-6 py-3 border-b border-emerald-900/30">
+                      <h2 className="text-sm font-bold text-slate-200 uppercase tracking-wider">Invoice totals (manual)</h2>
+                    </div>
+                    <div className="p-6 space-y-5">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">Description on invoice</label>
+                        <input
+                          type="text"
+                          value={bookLineLabel}
+                          onChange={(e) => setBookLineLabel(e.target.value)}
+                          placeholder={BOOK_ENTRY_DEFAULT}
+                          className="w-full px-4 py-3 input-surface rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                        />
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">Book cost</label>
+                          <p className="text-[11px] text-slate-500 mb-1.5">Total cost / inventory out (your figure)</p>
+                          <CurrencyInput
+                            value={bookCost}
+                            onChange={setBookCost}
+                            placeholder="0.00"
+                            allowBlank
+                            className="w-full pl-8 pr-2 py-3 input-surface rounded-xl text-sm text-right focus:ring-2 focus:ring-emerald-500 outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">Selling price</label>
+                          <p className="text-[11px] text-slate-500 mb-1.5">Invoice total (what customer pays)</p>
+                          <CurrencyInput
+                            value={bookPrice}
+                            onChange={setBookPrice}
+                            placeholder="0.00"
+                            min={0}
+                            className="w-full pl-8 pr-2 py-3 input-surface rounded-xl text-sm text-right focus:ring-2 focus:ring-emerald-500 outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">Profit or loss</label>
+                          <p className="text-[11px] text-slate-500 mb-1.5">Type the profit or loss for this invoice (can be negative)</p>
+                          <div className="relative">
+                            <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm font-medium">Rs.</span>
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              value={bookProfit}
+                              onChange={(e) => setBookProfit(e.target.value)}
+                              placeholder="0.00"
+                              className="w-full pl-12 pr-3 py-3 input-surface rounded-xl text-sm text-right focus:ring-2 focus:ring-emerald-500 outline-none"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                      <p className="text-xs text-slate-500 border border-emerald-900/30 bg-emerald-950/20 rounded-xl px-4 py-3">
+                        Reference only — <span className="text-slate-400">selling − book cost</span> ={' '}
+                        <span className="font-semibold text-slate-300">{formatCurrency(bookSuggestedProfit)}</span>
+                        . Your saved profit is the value you typed above, not this calculation.
+                      </p>
+                    </div>
+                    <div className="border-t-2 border-emerald-900/40 bg-emerald-950/30">
+                      <div className="px-6 py-4">
+                        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Summary (what you entered)</h3>
+                        <div className="grid grid-cols-3 gap-4">
+                          <div className="bg-slate-900/50 rounded-xl p-4 border border-emerald-900/20">
+                            <p className="text-xs text-slate-400 font-semibold uppercase tracking-wider mb-1">Book cost</p>
+                            <p className="text-xl font-bold text-slate-100">{formatCurrency(bookCostNum)}</p>
+                          </div>
+                          <div className="bg-slate-900/50 rounded-xl p-4 border border-emerald-900/20">
+                            <p className="text-xs text-slate-400 font-semibold uppercase tracking-wider mb-1">Selling price</p>
+                            <p className="text-xl font-bold text-blue-300">{formatCurrency(bookPriceNum)}</p>
+                          </div>
+                          <div className={`rounded-xl p-4 border ${bookProfitNum > 0 ? 'bg-emerald-950/40 border-emerald-900/30' : bookProfitNum < 0 ? 'bg-red-950/40 border-red-900/30' : 'bg-slate-900/50 border-emerald-900/20'}`}>
+                            <p className="text-xs text-slate-400 font-semibold uppercase tracking-wider mb-1">Your profit / loss</p>
+                            <p className={`text-xl font-bold ${bookProfitNum > 0 ? 'text-emerald-300' : bookProfitNum < 0 ? 'text-red-300' : 'text-slate-400'}`}>
+                              {formatCurrency(bookProfitNum)}
+                            </p>
+                          </div>
+                        </div>
+                        {paymentType === 'cash' ? (
+                          <p className="text-xs text-emerald-300/70 mt-3">Cash sale: inventory decreases by book cost, cash increases by selling price</p>
+                        ) : paymentType === 'chequesale' ? (
+                          <p className="text-xs text-blue-300/70 mt-3">Cheque sale: inventory decreases by book cost, on cheque increases by selling price</p>
+                        ) : (
+                          <p className="text-xs text-amber-300/70 mt-3">Credit sale: inventory decreases by book cost, receivables increase by selling price</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
                 <div className="surface rounded-2xl overflow-hidden">
                   <div className="bg-emerald-950/40 px-6 py-3 border-b border-emerald-900/30 flex items-center justify-between">
                     <h2 className="text-sm font-bold text-slate-200 uppercase tracking-wider">Invoice Items</h2>
@@ -498,7 +759,7 @@ export function SalesPage() {
                           <th className="text-center px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider w-28">Qty</th>
                           <th className="text-right px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider w-36">Cost Price</th>
                           <th className="text-right px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider w-36">Selling Price</th>
-                          <th className="text-right px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider w-32">Profit</th>
+                          <th className="text-right px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider w-32">Profit (auto)</th>
                           <th className="w-10 px-2 py-3"></th>
                         </tr>
                       </thead>
@@ -599,6 +860,7 @@ export function SalesPage() {
                     </div>
                   </div>
                 </div>
+                )}
 
                 {error && (
                   <div className="bg-red-950/30 border border-red-900/40 text-red-200 text-sm rounded-xl px-4 py-3">{error}</div>

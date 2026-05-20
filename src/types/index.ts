@@ -23,6 +23,10 @@ export interface Sale {
   total_profit: number
   payment_type: PaymentType
   invoice_status: string
+  /** Credit sales: false until month close; cash/cheque true. Omitted until DB migration. */
+  is_finalized?: boolean
+  /** Cheque sales: false until confirmed, then transfers to cash_in_hand */
+  cheque_confirmed?: boolean
   notes: string | null
   created_at: string
   updated_at: string
@@ -47,6 +51,8 @@ export interface Purchase {
   party_id?: string | null
   total_amount: number
   payment_type: PaymentType
+  /** Credit purchases: false until month close. Omitted until DB migration. */
+  is_finalized?: boolean
   notes: string | null
   created_at: string
 }
@@ -59,6 +65,7 @@ export interface ReceivablePayment {
   method?: 'cash' | 'cheque' | 'bank' | 'other' | null
   cheque_date?: string | null
   cheque_number?: string | null
+  cheque_status?: 'pending' | 'cleared' | 'bounced' | null
   amount: number
   notes: string | null
   created_at: string
@@ -68,6 +75,11 @@ export interface PayablePayment {
   id: string
   purchase_id: string
   supplier_name: string
+  payment_date?: string | null
+  method?: 'cash' | 'cheque' | 'bank' | 'other' | null
+  cheque_date?: string | null
+  cheque_number?: string | null
+  cheque_status?: 'pending' | 'cleared' | 'bounced' | null
   amount: number
   notes: string | null
   created_at: string
@@ -119,7 +131,7 @@ export interface CreateReturnInput {
   items: ReturnItemInput[]
 }
 
-export type CashTransactionType = 'sale_cash' | 'sale_credit' | 'sale_cheque' | 'purchase_cash' | 'purchase_credit' | 'receivable_collection' | 'payable_payment' | 'expense' | 'return'
+export type CashTransactionType = 'sale_cash' | 'sale_credit' | 'sale_cheque' | 'sale_cheque_confirmed' | 'purchase_cash' | 'purchase_credit' | 'receivable_collection' | 'payable_payment' | 'expense' | 'return' | 'receivable_cheque_cleared' | 'payable_cheque_cleared'
 export type CashReferenceType = 'sale' | 'purchase' | 'receivable_payment' | 'payable_payment' | 'expense' | 'return'
 export type CashDirection = 'in' | 'out'
 
@@ -191,6 +203,10 @@ export interface PayableWithPurchase extends Purchase {
 export interface CreatePayablePaymentInput {
   purchase_id: string
   supplier_name: string
+  payment_date?: string
+  method?: 'cash' | 'cheque' | 'bank' | 'other'
+  cheque_date?: string
+  cheque_number?: string
   amount: number
   notes?: string
 }
@@ -226,6 +242,7 @@ export interface Expense {
   title: string
   category: ExpenseCategory
   amount: number
+  is_finalized?: boolean
   notes: string | null
   created_at: string
 }
@@ -247,6 +264,7 @@ export interface DashboardStats {
   todayPurchases: number
   todaySalesCount: number
   todayPurchasesCount: number
+  /** Profit from finalized sales only (official P&L). */
   totalProfit: number
   totalLoss: number
   netProfit: number
@@ -254,6 +272,13 @@ export interface DashboardStats {
   monthProfit: number
   yearProfit: number
   totalExpenses: number
+  /** Includes pending credit sales (live estimate). */
+  estimatedTotalProfit: number
+  estimatedTotalLoss: number
+  estimatedNetProfit: number
+  estimatedTodayProfit: number
+  estimatedMonthProfit: number
+  estimatedYearProfit: number
 }
 
 export interface MonthlyProfitTrend {
@@ -286,4 +311,81 @@ export interface RecentTransaction {
   amount: number
   direction: 'in' | 'out'
   created_at: string
+}
+
+export interface MonthlySnapshot {
+  id: string
+  month_key: string
+  total_profit: number
+  total_loss: number
+  total_expenses: number
+  net_profit: number
+  invoice_count: number
+  total_sales_amount: number
+  total_cost_amount: number
+  total_purchases?: number
+  total_receivables_at_close?: number
+  snapshot_data: Record<string, unknown> | null
+  closed_at: string
+}
+
+/** Owner-typed manual P&L notebook (no link to sales/expenses tables). */
+export interface ManualProfitLoss {
+  id: string
+  entry_date: string
+  description: string
+  sales_amount: number
+  cost_amount: number
+  expense_amount: number
+  profit_amount: number
+  notes: string | null
+  created_at: string
+}
+
+export interface ManualProfitLossInput {
+  entry_date: string
+  description: string
+  sales_amount: number
+  cost_amount: number
+  expense_amount: number
+  notes: string | null
+}
+
+/** One line stored inside an archived manual P&L report. */
+export interface ManualPnlReportRow {
+  entry_date: string
+  description: string
+  sales_amount: number
+  cost_amount: number
+  expense_amount: number
+  profit_amount: number
+  notes: string | null
+}
+
+/** Saved when the manual notebook is cleared (month-end archive). */
+export interface ManualPnlReport {
+  id: string
+  title: string
+  period_from: string | null
+  period_to: string | null
+  total_sales: number
+  total_cost: number
+  total_expenses: number
+  net_profit: number
+  row_count: number
+  report_data: ManualPnlReportRow[]
+  archived_at: string
+}
+
+export interface ManualPnlReportSummary {
+  id: string
+  title: string
+  period_from: string | null
+  period_to: string | null
+  total_sales: number
+  total_cost: number
+  total_expenses: number
+  net_profit: number
+  row_count: number
+  archived_at: string
 }

@@ -5,6 +5,7 @@ import { SummaryCard } from '../components/SummaryCard'
 import { getReportStats, getLedger } from '../services/businessService'
 import type { ReportStats } from '../types'
 import { formatCurrency } from '../lib/utils'
+import { ManualPnlArchivesSection } from '../components/ManualPnlArchivesSection'
 
 export function ReportsPage() {
   const [stats, setStats] = useState<ReportStats | null>(null)
@@ -51,7 +52,7 @@ export function ReportsPage() {
       <div className="space-y-6 animate-fade-in">
         <div>
           <h1 className="text-2xl font-bold text-slate-100">Reports</h1>
-          <p className="text-sm text-slate-300 mt-0.5">Sales, purchases & movement summaries</p>
+          <p className="text-sm text-slate-300 mt-0.5">Sales summaries and archived manual P&amp;L notebooks</p>
         </div>
 
         {/* Date Filters */}
@@ -80,6 +81,8 @@ export function ReportsPage() {
             </button>
           )}
         </div>
+
+        <ManualPnlArchivesSection />
 
         {/* Current Position */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

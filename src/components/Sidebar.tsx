@@ -9,9 +9,9 @@ import {
   CreditCard,
   Users,
   BookOpen,
+  BookMarked,
   Receipt,
   BarChart3,
-  TrendingUp,
   Settings,
   Menu,
   X,
@@ -20,6 +20,7 @@ import {
   LogOut,
   ChevronDown,
   ChevronUp,
+  Shield,
 } from 'lucide-react'
 
 type NavItem = {
@@ -60,7 +61,7 @@ const navSections: NavSection[] = [
       { to: '/parties', label: 'Parties', icon: Users },
       { to: '/cash-ledger', label: 'Cash Ledger', icon: BookOpen },
       { to: '/expenses', label: 'Expenses', icon: Receipt },
-      { to: '/profit-loss', label: 'Profit & Loss', icon: TrendingUp },
+      { to: '/manual-profit-loss', label: 'Manual P&L', icon: BookMarked },
       { to: '/reports', label: 'Reports', icon: BarChart3 },
     ],
   },
@@ -68,6 +69,14 @@ const navSections: NavSection[] = [
     key: 'sales',
     label: 'Sales / Invoices',
     items: [{ to: '/sales', label: 'Sales / Invoices', icon: ShoppingCart }],
+  },
+  {
+    key: 'admin',
+    label: 'Admin',
+    collapsible: true,
+    items: [
+      { to: '/admin', label: 'Backup & Restore', icon: Shield },
+    ],
   },
   {
     key: 'settings',
@@ -81,11 +90,12 @@ export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
-    dashboard: true,
-    inventory: true,
-    sales: true,
-    finance: true,
-    settings: true,
+    dashboard: false,
+    inventory: false,
+    sales: false,
+    finance: false,
+    admin: false,
+    settings: false,
   })
 
   const linkClass = (isActive: boolean) =>

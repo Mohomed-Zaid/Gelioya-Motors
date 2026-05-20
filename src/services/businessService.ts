@@ -26,11 +26,26 @@ import type {
   Return,
   ReturnItem,
   CreateReturnInput,
+  MonthlySnapshot,
+  ManualProfitLoss,
+  ManualProfitLossInput,
+  ManualPnlReport,
+  ManualPnlReportRow,
+  ManualPnlReportSummary,
 } from '../types'
 
-function getClient() {
+export function getClient() {
   if (!supabase) throw new Error('Supabase is not configured. Please add your VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to the .env file.')
   return supabase
+}
+
+/** All new sales (including credit) count toward P&L immediately; month close still snapshots the period. */
+function isFinalizedForNewSale(_paymentType: CreateSaleInput['payment_type']): boolean {
+  return true
+}
+
+function isFinalizedForNewPurchase(_paymentType: CreatePurchaseInput['payment_type']): boolean {
+  return true
 }
 
 // ============================================
@@ -76,7 +91,7 @@ export async function initializeLedger(
   return data
 }
 
-async function updateLedger(updates: Partial<Pick<BusinessLedger, 'inventory_value' | 'cash_in_hand' | 'receivables_total' | 'payables_total' | 'on_cheque'>>): Promise<BusinessLedger> {
+export async function updateLedger(updates: Partial<Pick<BusinessLedger, 'inventory_value' | 'cash_in_hand' | 'receivables_total' | 'payables_total' | 'on_cheque'>>): Promise<BusinessLedger> {
   const ledger = await getLedger()
   if (!ledger) throw new Error('No active ledger found. Please set up opening balances first.')
 
@@ -102,7 +117,7 @@ async function updateLedger(updates: Partial<Pick<BusinessLedger, 'inventory_val
 // NEXT SEQUENCE NUMBER
 // ============================================
 
-async function getNextNumber(table: 'sales' | 'purchases', field: 'invoice_number' | 'purchase_number', prefix: string): Promise<number> {
+export async function getNextNumber(table: 'sales' | 'purchases', field: 'invoice_number' | 'purchase_number', prefix: string): Promise<number> {
   const currentMonth = `${prefix}${new Date().getFullYear().toString().slice(-2)}${String(new Date().getMonth() + 1).padStart(2, '0')}`
 
   const { data, error } = await getClient()
@@ -427,6 +442,8 @@ export async function createSale(input: CreateSaleInput): Promise<Sale> {
       total_profit: input.total_profit,
       payment_type: input.payment_type,
       invoice_status: 'completed',
+      is_finalized: isFinalizedForNewSale(input.payment_type),
+      cheque_confirmed: input.payment_type === 'chequesale' ? false : true,
       notes: input.notes?.trim() || null,
     })
     .select()
@@ -446,6 +463,7 @@ export async function createSale(input: CreateSaleInput): Promise<Sale> {
   if (itemsError) throw itemsError
 
   // Update ledger: inventory decreases by total_cost only if cost exists
+  // For chequesale, don't update ledger until confirmed
   const ledgerUpdates: Partial<Pick<BusinessLedger, 'inventory_value' | 'cash_in_hand' | 'receivables_total' | 'on_cheque'>> = {}
   if (input.total_cost > 0) {
     ledgerUpdates.inventory_value = ledger.inventory_value - input.total_cost
@@ -454,29 +472,35 @@ export async function createSale(input: CreateSaleInput): Promise<Sale> {
   if (input.payment_type === 'cash') {
     ledgerUpdates.cash_in_hand = ledger.cash_in_hand + input.total_sales
   } else if (input.payment_type === 'chequesale') {
-    ledgerUpdates.on_cheque = ledger.on_cheque + input.total_sales
+    // Don't update ledger for chequesale until confirmed
+    // It will be pending until user confirms
   } else {
     ledgerUpdates.receivables_total = ledger.receivables_total + input.total_sales
   }
 
-  await updateLedger(ledgerUpdates)
+  if (Object.keys(ledgerUpdates).length > 0) {
+    await updateLedger(ledgerUpdates)
+  }
 
-  await logCashTransaction(
-    input.payment_type === 'cash' ? 'sale_cash' : input.payment_type === 'chequesale' ? 'sale_cheque' : 'sale_credit',
-    'sale',
-    sale.id,
-    input.total_sales,
-    'in',
-    `Invoice ${invoiceNumber} - ${input.customer_name}`
-  )
+  if (input.payment_type !== 'chequesale') {
+    await logCashTransaction(
+      input.payment_type === 'cash' ? 'sale_cash' : 'sale_credit',
+      'sale',
+      sale.id,
+      input.total_sales,
+      'in',
+      `Invoice ${invoiceNumber} - ${input.customer_name}`
+    )
+  }
 
   return sale
 }
 
-export async function getSales(dateFrom?: string, dateTo?: string): Promise<Sale[]> {
+export async function getSales(dateFrom?: string, dateTo?: string, options?: { finalizedOnly?: boolean }): Promise<Sale[]> {
   let query = getClient().from('sales').select('*, sale_items(*)').order('invoice_date', { ascending: false }).order('created_at', { ascending: false })
   if (dateFrom) query = query.gte('invoice_date', dateFrom)
   if (dateTo) query = query.lte('invoice_date', dateTo)
+  if (options?.finalizedOnly) query = query.eq('is_finalized', true)
   const { data, error } = await query
   if (error) throw error
   return data
@@ -578,6 +602,7 @@ export async function updateSale(id: string, input: CreateSaleInput): Promise<Sa
       total_sales: input.total_sales,
       total_profit: input.total_profit,
       payment_type: input.payment_type,
+      is_finalized: isFinalizedForNewSale(input.payment_type),
       notes: input.notes?.trim() || null,
     })
     .eq('id', id)
@@ -685,6 +710,7 @@ export async function createPurchase(input: CreatePurchaseInput): Promise<Purcha
       party_id: partyId,
       total_amount: input.total_amount,
       payment_type: input.payment_type,
+      is_finalized: isFinalizedForNewPurchase(input.payment_type),
       notes: input.notes?.trim() || null,
     })
     .select()
@@ -882,6 +908,7 @@ export async function updatePurchase(id: string, input: CreatePurchaseInput): Pr
       party_id: partyId,
       total_amount: input.total_amount,
       payment_type: input.payment_type,
+      is_finalized: isFinalizedForNewPurchase(input.payment_type),
       notes: input.notes?.trim() || null,
     })
     .eq('id', id)
@@ -1049,6 +1076,43 @@ export async function collectReceivablePayment(input: CreateReceivablePaymentInp
     `Receivable collection${input.method ? ` (${input.method})` : ''} - ${input.customer_name} - Invoice ${sale.invoice_number}`
   )
 
+  // If overpayment, create a payable entry with customer as supplier
+  const overpaymentAmount = totalPaid + input.amount - Number(sale.total_sales)
+  console.log('Overpayment check:', { totalPaid, inputAmount: input.amount, saleTotal: sale.total_sales, overpaymentAmount })
+  if (overpaymentAmount > 0) {
+    console.log('Creating payable for overpayment:', overpaymentAmount)
+    const nextSeq = await getNextNumber('purchases', 'purchase_number', 'PO')
+    const purchaseNumber = generateInvoiceNumber('PO', nextSeq)
+
+    // Auto-create party if name provided
+    let partyId = sale.party_id || null
+    if (!partyId && input.customer_name.trim()) {
+      partyId = await createPartyIfMissing(input.customer_name)
+    }
+
+    const { error: payableError } = await getClient()
+      .from('purchases')
+      .insert({
+        purchase_number: purchaseNumber,
+        supplier_name: input.customer_name.trim(),
+        party_id: partyId,
+        total_amount: overpaymentAmount,
+        payment_type: 'credit',
+        notes: `Overpayment from receivable - Invoice ${sale.invoice_number}`,
+      })
+    if (payableError) {
+      console.error('Failed to create payable for overpayment:', payableError)
+      throw payableError
+    }
+
+    // Update ledger: increase payables_total
+    const currentLedger = await getLedger()
+    await updateLedger({
+      payables_total: currentLedger!.payables_total + overpaymentAmount,
+    })
+    console.log('Payable created successfully for overpayment')
+  }
+
   return payment
 }
 
@@ -1152,6 +1216,10 @@ export async function createPayablePayment(input: CreatePayablePaymentInput): Pr
     .insert({
       purchase_id: input.purchase_id,
       supplier_name: input.supplier_name.trim(),
+      payment_date: input.payment_date || undefined,
+      method: input.method || 'cash',
+      cheque_date: input.method === 'cheque' ? input.cheque_date || undefined : null,
+      cheque_number: input.method === 'cheque' ? input.cheque_number?.trim() || undefined : null,
       amount: input.amount,
       notes: input.notes?.trim() || null,
     })
@@ -1160,10 +1228,16 @@ export async function createPayablePayment(input: CreatePayablePaymentInput): Pr
   if (error) throw error
 
   // Update ledger: cash decreases, payables decreases
-  await updateLedger({
-    cash_in_hand: ledger.cash_in_hand - input.amount,
+  // Cheque payments decrease on_cheque, others decrease cash_in_hand
+  const ledgerUpdates: Partial<Pick<BusinessLedger, 'cash_in_hand' | 'payables_total' | 'on_cheque'>> = {
     payables_total: ledger.payables_total - input.amount,
-  })
+  }
+  if (input.method === 'cheque') {
+    ledgerUpdates.on_cheque = ledger.on_cheque - input.amount
+  } else {
+    ledgerUpdates.cash_in_hand = ledger.cash_in_hand - input.amount
+  }
+  await updateLedger(ledgerUpdates)
 
   // Log cash transaction
   await logCashTransaction(
@@ -1232,26 +1306,56 @@ export async function getDashboardStats(): Promise<DashboardStats> {
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0]
   const yearStart = new Date(now.getFullYear(), 0, 1).toISOString().split('T')[0]
 
-  const [salesToday, purchasesToday, allSales, allExpenses, todaySalesProfit, monthSalesProfit, yearSalesProfit] = await Promise.all([
+  const [
+    salesToday,
+    purchasesToday,
+    finalizedAllSales,
+    estimatedAllSales,
+    allExpenses,
+    todayFin,
+    todayEst,
+    monthFin,
+    monthEst,
+    yearFin,
+    yearEst,
+  ] = await Promise.all([
     getClient().from('sales').select('total_sales').gte('invoice_date', todayStr),
     getClient().from('purchases').select('total_amount').gte('created_at', todayStr),
+    getClient().from('sales').select('total_profit').eq('is_finalized', true),
     getClient().from('sales').select('total_profit'),
-    getClient().from('expenses').select('amount'),
+    getClient().from('expenses').select('amount').eq('is_finalized', true),
+    getClient().from('sales').select('total_profit').gte('invoice_date', todayStr).eq('is_finalized', true),
     getClient().from('sales').select('total_profit').gte('invoice_date', todayStr),
+    getClient().from('sales').select('total_profit').gte('invoice_date', monthStart).eq('is_finalized', true),
     getClient().from('sales').select('total_profit').gte('invoice_date', monthStart),
+    getClient().from('sales').select('total_profit').gte('invoice_date', yearStart).eq('is_finalized', true),
     getClient().from('sales').select('total_profit').gte('invoice_date', yearStart),
   ])
 
   const todaySales = (salesToday.data || []).reduce((sum, s) => sum + Number(s.total_sales), 0)
   const todayPurchases = (purchasesToday.data || []).reduce((sum, p) => sum + Number(p.total_amount), 0)
 
-  const totalProfit = (allSales.data || []).reduce((sum, s) => sum + Math.max(0, Number(s.total_profit)), 0)
-  const totalLoss = (allSales.data || []).reduce((sum, s) => sum + Math.min(0, Number(s.total_profit)), 0)
+  const sumPL = (rows: { total_profit: number | string }[]) => {
+    let tp = 0
+    let tl = 0
+    for (const s of rows) {
+      const p = Number(s.total_profit)
+      tp += Math.max(0, p)
+      tl += Math.min(0, p)
+    }
+    return { tp, tl, net: tp + tl }
+  }
+
+  const finAll = sumPL((finalizedAllSales.data || []) as { total_profit: number | string }[])
+  const estAll = sumPL((estimatedAllSales.data || []) as { total_profit: number | string }[])
   const totalExpenses = (allExpenses.data || []).reduce((sum, e) => sum + Number(e.amount), 0)
 
-  const todayProfit = (todaySalesProfit.data || []).reduce((sum, s) => sum + Number(s.total_profit), 0)
-  const monthProfit = (monthSalesProfit.data || []).reduce((sum, s) => sum + Number(s.total_profit), 0)
-  const yearProfit = (yearSalesProfit.data || []).reduce((sum, s) => sum + Number(s.total_profit), 0)
+  const finToday = sumPL((todayFin.data || []) as { total_profit: number | string }[])
+  const estToday = sumPL((todayEst.data || []) as { total_profit: number | string }[])
+  const finMonth = sumPL((monthFin.data || []) as { total_profit: number | string }[])
+  const estMonth = sumPL((monthEst.data || []) as { total_profit: number | string }[])
+  const finYear = sumPL((yearFin.data || []) as { total_profit: number | string }[])
+  const estYear = sumPL((yearEst.data || []) as { total_profit: number | string }[])
 
   return {
     inventoryValue: ledger?.inventory_value ?? 0,
@@ -1263,27 +1367,35 @@ export async function getDashboardStats(): Promise<DashboardStats> {
     todayPurchases,
     todaySalesCount: salesToday.data?.length ?? 0,
     todayPurchasesCount: purchasesToday.data?.length ?? 0,
-    totalProfit,
-    totalLoss,
-    netProfit: totalProfit + totalLoss - totalExpenses,
-    todayProfit,
-    monthProfit,
-    yearProfit,
+    totalProfit: finAll.tp,
+    totalLoss: finAll.tl,
+    netProfit: finAll.net - totalExpenses,
+    todayProfit: finToday.net,
+    monthProfit: finMonth.net,
+    yearProfit: finYear.net,
     totalExpenses,
+    estimatedTotalProfit: estAll.tp,
+    estimatedTotalLoss: estAll.tl,
+    estimatedNetProfit: estAll.net - totalExpenses,
+    estimatedTodayProfit: estToday.net,
+    estimatedMonthProfit: estMonth.net,
+    estimatedYearProfit: estYear.net,
   }
 }
 
-export async function getMonthlyProfitTrend(months = 6): Promise<MonthlyProfitTrend[]> {
+export async function getMonthlyProfitTrend(months = 6, options?: { includePendingSales?: boolean }): Promise<MonthlyProfitTrend[]> {
   const start = new Date()
   start.setMonth(start.getMonth() - (months - 1))
   start.setDate(1)
   const startDate = start.toISOString().split('T')[0]
 
-  const { data, error } = await getClient()
+  let q = getClient()
     .from('sales')
     .select('invoice_date, total_profit, total_sales, total_cost')
     .gte('invoice_date', startDate)
     .order('invoice_date', { ascending: true })
+  if (!options?.includePendingSales) q = q.eq('is_finalized', true)
+  const { data, error } = await q
   if (error) throw error
 
   const byMonth = new Map<string, MonthlyProfitTrend>()
@@ -1319,22 +1431,18 @@ export async function getMonthlyProfitTrend(months = 6): Promise<MonthlyProfitTr
     .map(([, v]) => v)
 }
 
-export async function getTopProfitInvoices(limit = 3): Promise<Sale[]> {
-  const { data, error } = await getClient()
-    .from('sales')
-    .select('*')
-    .order('total_profit', { ascending: false })
-    .limit(limit)
+export async function getTopProfitInvoices(limit = 3, includePendingSales = true): Promise<Sale[]> {
+  let q = getClient().from('sales').select('*').order('total_profit', { ascending: false }).limit(limit)
+  if (!includePendingSales) q = q.eq('is_finalized', true)
+  const { data, error } = await q
   if (error) throw error
   return data || []
 }
 
-export async function getTopLossInvoices(limit = 3): Promise<Sale[]> {
-  const { data, error } = await getClient()
-    .from('sales')
-    .select('*')
-    .order('total_profit', { ascending: true })
-    .limit(limit)
+export async function getTopLossInvoices(limit = 3, includePendingSales = true): Promise<Sale[]> {
+  let q = getClient().from('sales').select('*').order('total_profit', { ascending: true }).limit(limit)
+  if (!includePendingSales) q = q.eq('is_finalized', true)
+  const { data, error } = await q
   if (error) throw error
   return data || []
 }
@@ -1476,6 +1584,7 @@ export async function createExpense(input: CreateExpenseInput): Promise<Expense>
       title: input.title.trim(),
       category: input.category,
       amount: input.amount,
+      is_finalized: true,
       notes: input.notes?.trim() || null,
     })
     .select()
@@ -1491,10 +1600,11 @@ export async function createExpense(input: CreateExpenseInput): Promise<Expense>
   return expense
 }
 
-export async function getExpenses(dateFrom?: string, dateTo?: string): Promise<Expense[]> {
+export async function getExpenses(dateFrom?: string, dateTo?: string, options?: { finalizedOnly?: boolean }): Promise<Expense[]> {
   let query = getClient().from('expenses').select('*').order('created_at', { ascending: false })
   if (dateFrom) query = query.gte('created_at', dateFrom)
   if (dateTo) query = query.lte('created_at', dateTo)
+  if (options?.finalizedOnly) query = query.eq('is_finalized', true)
   const { data, error } = await query
   if (error) throw error
   return data
@@ -1657,4 +1767,453 @@ export async function deleteReturn(id: string): Promise<void> {
   // Delete return (cascade deletes return_items)
   const { error } = await getClient().from('returns').delete().eq('id', id)
   if (error) throw error
+}
+
+// ============================================
+// MONTHLY SNAPSHOTS
+// ============================================
+
+export async function getMonthlySnapshots(): Promise<MonthlySnapshot[]> {
+  const { data, error } = await getClient()
+    .from('monthly_snapshots')
+    .select('*')
+    .order('month_key', { ascending: false })
+
+  if (error) throw error
+  return (data || []) as MonthlySnapshot[]
+}
+
+export async function closeMonth(monthKey: string): Promise<MonthlySnapshot> {
+  const [yearStr, monthStr] = monthKey.split('-')
+  const year = parseInt(yearStr, 10)
+  const month = parseInt(monthStr, 10)
+  if (!year || !month || month < 1 || month > 12) throw new Error('Invalid month key. Use YYYY-MM.')
+
+  const { data: existing, error: exErr } = await getClient()
+    .from('monthly_snapshots')
+    .select('id')
+    .eq('month_key', monthKey)
+    .maybeSingle()
+  if (exErr) throw exErr
+  if (existing) throw new Error(`Month ${monthKey} is already closed. Snapshots are immutable.`)
+
+  const dateFrom = `${yearStr}-${monthStr}-13`
+  const nextMonth = month === 12 ? 1 : month + 1
+  const nextYear = month === 12 ? year + 1 : year
+  const dateTo = `${nextYear}-${String(nextMonth).padStart(2, '0')}-12`
+
+  const ledger = await getLedger()
+  if (!ledger) throw new Error('No active ledger. Set up opening balances first.')
+
+  const dateToEnd = `${dateTo}T23:59:59.999Z`
+  const dateFromStart = `${dateFrom}T00:00:00.000Z`
+
+  const { error: sFinErr } = await getClient()
+    .from('sales')
+    .update({ is_finalized: true })
+    .gte('invoice_date', dateFrom)
+    .lte('invoice_date', dateTo)
+  if (sFinErr) throw sFinErr
+
+  const { error: pFinErr } = await getClient()
+    .from('purchases')
+    .update({ is_finalized: true })
+    .gte('created_at', dateFromStart)
+    .lte('created_at', dateToEnd)
+  if (pFinErr) throw pFinErr
+
+  const { error: eFinErr } = await getClient()
+    .from('expenses')
+    .update({ is_finalized: true })
+    .gte('created_at', dateFromStart)
+    .lte('created_at', dateToEnd)
+  if (eFinErr) throw eFinErr
+
+  const sales = await getSales(dateFrom, dateTo)
+  const expenses = await getExpenses(dateFromStart, dateToEnd, { finalizedOnly: true })
+  const purchases = await getPurchases(dateFromStart, dateToEnd)
+
+  const totalProfit = sales.reduce((s, x) => s + Math.max(0, Number(x.total_profit)), 0)
+  const totalLoss = sales.reduce((s, x) => s + Math.abs(Math.min(0, Number(x.total_profit))), 0)
+  const totalExpenses = expenses.reduce((s, e) => s + Number(e.amount), 0)
+  const netProfit = totalProfit - totalLoss - totalExpenses
+  const invoiceCount = sales.length
+  const totalSalesAmount = sales.reduce((s, x) => s + Number(x.total_sales), 0)
+  const totalCostAmount = sales.reduce((s, x) => s + Number(x.total_cost), 0)
+  const totalPurchasesSum = purchases.reduce((s, p) => s + Number(p.total_amount), 0)
+
+  const freshLedger = await getLedger()
+  const receivablesAtClose = freshLedger?.receivables_total ?? 0
+
+  const snapshotData = {
+    sales: sales.map((s) => ({
+      invoice_number: s.invoice_number,
+      customer_name: s.customer_name,
+      total_cost: Number(s.total_cost),
+      total_sales: Number(s.total_sales),
+      total_profit: Number(s.total_profit),
+      payment_type: s.payment_type,
+      invoice_date: s.invoice_date,
+      is_finalized: true,
+    })),
+    expenses: expenses.map((e) => ({
+      title: e.title,
+      category: e.category,
+      amount: Number(e.amount),
+      created_at: e.created_at,
+    })),
+    purchases: purchases.map((p) => ({
+      purchase_number: p.purchase_number,
+      supplier_name: p.supplier_name,
+      total_amount: Number(p.total_amount),
+      payment_type: p.payment_type,
+      created_at: p.created_at,
+    })),
+  }
+
+  const { data, error } = await getClient()
+    .from('monthly_snapshots')
+    .insert({
+      month_key: monthKey,
+      total_profit: totalProfit,
+      total_loss: totalLoss,
+      total_expenses: totalExpenses,
+      net_profit: netProfit,
+      invoice_count: invoiceCount,
+      total_sales_amount: totalSalesAmount,
+      total_cost_amount: totalCostAmount,
+      total_purchases: totalPurchasesSum,
+      total_receivables_at_close: receivablesAtClose,
+      snapshot_data: snapshotData,
+    })
+    .select()
+    .single()
+
+  if (error) throw error
+  return data as MonthlySnapshot
+}
+
+export async function deleteMonthlySnapshot(id: string): Promise<void> {
+  const { error } = await getClient().from('monthly_snapshots').delete().eq('id', id)
+  if (error) throw error
+}
+
+// ============================================
+// MANUAL PROFIT & LOSS (notebook — typed only)
+// ============================================
+
+function computeManualProfit(sales: number, cost: number, expense: number): number {
+  return Number(sales) - Number(cost) - Number(expense)
+}
+
+function mapManualProfitLossRow(row: Record<string, unknown>): ManualProfitLoss {
+  return {
+    id: String(row.id),
+    entry_date: String(row.entry_date),
+    description: String(row.description ?? ''),
+    sales_amount: Number(row.sales_amount ?? 0),
+    cost_amount: Number(row.cost_amount ?? 0),
+    expense_amount: Number(row.expense_amount ?? 0),
+    profit_amount: Number(row.profit_amount ?? 0),
+    notes: row.notes != null ? String(row.notes) : null,
+    created_at: String(row.created_at),
+  }
+}
+
+export async function getManualProfitLossEntries(dateFrom?: string, dateTo?: string): Promise<ManualProfitLoss[]> {
+  let q = getClient()
+    .from('manual_profit_loss')
+    .select('*')
+    .order('entry_date', { ascending: false })
+    .order('created_at', { ascending: false })
+  if (dateFrom) q = q.gte('entry_date', dateFrom)
+  if (dateTo) q = q.lte('entry_date', dateTo)
+  const { data, error } = await q
+  if (error) throw error
+  return (data || []).map((r) => mapManualProfitLossRow(r as Record<string, unknown>))
+}
+
+export async function createManualProfitLossEntry(input?: Partial<ManualProfitLossInput>): Promise<ManualProfitLoss> {
+  const sales = input?.sales_amount ?? 0
+  const cost = input?.cost_amount ?? 0
+  const expense = input?.expense_amount ?? 0
+  const profit = computeManualProfit(sales, cost, expense)
+  const { data, error } = await getClient()
+    .from('manual_profit_loss')
+    .insert({
+      entry_date: input?.entry_date ?? new Date().toISOString().split('T')[0],
+      description: input?.description?.trim() ?? '',
+      sales_amount: sales,
+      cost_amount: cost,
+      expense_amount: expense,
+      profit_amount: profit,
+      notes: input?.notes?.trim() ? input.notes.trim() : null,
+    })
+    .select()
+    .single()
+  if (error) throw error
+  return mapManualProfitLossRow(data as Record<string, unknown>)
+}
+
+export async function updateManualProfitLossEntry(id: string, input: ManualProfitLossInput): Promise<ManualProfitLoss> {
+  const sales = Number.isFinite(Number(input.sales_amount)) ? Number(input.sales_amount) : 0
+  const cost = Number.isFinite(Number(input.cost_amount)) ? Number(input.cost_amount) : 0
+  const expense = Number.isFinite(Number(input.expense_amount)) ? Number(input.expense_amount) : 0
+  const profit = computeManualProfit(sales, cost, expense)
+  const { data, error } = await getClient()
+    .from('manual_profit_loss')
+    .update({
+      entry_date: input.entry_date,
+      description: input.description.trim(),
+      sales_amount: sales,
+      cost_amount: cost,
+      expense_amount: expense,
+      profit_amount: profit,
+      notes: input.notes?.trim() ? input.notes.trim() : null,
+    })
+    .eq('id', id)
+    .select()
+    .single()
+  if (error) throw error
+  return mapManualProfitLossRow(data as Record<string, unknown>)
+}
+
+export async function deleteManualProfitLossEntry(id: string): Promise<void> {
+  const { error } = await getClient().from('manual_profit_loss').delete().eq('id', id)
+  if (error) throw error
+}
+
+/** Removes every manual P&L notebook row (for starting a new month/report). */
+export async function clearAllManualProfitLossEntries(): Promise<void> {
+  const { error } = await getClient()
+    .from('manual_profit_loss')
+    .delete()
+    .gte('entry_date', '1900-01-01')
+  if (error) throw error
+}
+
+function buildManualPnlReportTitle(periodFrom: string, periodTo: string): string {
+  const dFrom = new Date(`${periodFrom}T12:00:00`)
+  const dTo = new Date(`${periodTo}T12:00:00`)
+  if (periodFrom.slice(0, 7) === periodTo.slice(0, 7)) {
+    return dFrom.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
+  }
+  const fmt = (d: Date) =>
+    d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+  return `${fmt(dFrom)} – ${fmt(dTo)}`
+}
+
+function mapManualPnlReportRow(item: unknown): ManualPnlReportRow {
+  const r = item as Record<string, unknown>
+  return {
+    entry_date: String(r.entry_date ?? ''),
+    description: String(r.description ?? ''),
+    sales_amount: Number(r.sales_amount ?? 0),
+    cost_amount: Number(r.cost_amount ?? 0),
+    expense_amount: Number(r.expense_amount ?? 0),
+    profit_amount: Number(r.profit_amount ?? 0),
+    notes: r.notes != null ? String(r.notes) : null,
+  }
+}
+
+function mapManualPnlReport(row: Record<string, unknown>, includeData: boolean): ManualPnlReport {
+  const raw = row.report_data
+  const report_data = includeData && Array.isArray(raw) ? raw.map(mapManualPnlReportRow) : []
+  return {
+    id: String(row.id),
+    title: String(row.title ?? ''),
+    period_from: row.period_from != null ? String(row.period_from) : null,
+    period_to: row.period_to != null ? String(row.period_to) : null,
+    total_sales: Number(row.total_sales ?? 0),
+    total_cost: Number(row.total_cost ?? 0),
+    total_expenses: Number(row.total_expenses ?? 0),
+    net_profit: Number(row.net_profit ?? 0),
+    row_count: Number(row.row_count ?? 0),
+    report_data,
+    archived_at: String(row.archived_at),
+  }
+}
+
+function mapManualPnlReportSummary(row: Record<string, unknown>): ManualPnlReportSummary {
+  return {
+    id: String(row.id),
+    title: String(row.title ?? ''),
+    period_from: row.period_from != null ? String(row.period_from) : null,
+    period_to: row.period_to != null ? String(row.period_to) : null,
+    total_sales: Number(row.total_sales ?? 0),
+    total_cost: Number(row.total_cost ?? 0),
+    total_expenses: Number(row.total_expenses ?? 0),
+    net_profit: Number(row.net_profit ?? 0),
+    row_count: Number(row.row_count ?? 0),
+    archived_at: String(row.archived_at),
+  }
+}
+
+/** Saves the full notebook to reports, then clears live rows. */
+export async function archiveAndClearManualProfitLoss(): Promise<ManualPnlReport | null> {
+  const rows = await getManualProfitLossEntries()
+  if (rows.length === 0) {
+    await clearAllManualProfitLossEntries()
+    return null
+  }
+
+  let totalSales = 0
+  let totalCost = 0
+  let totalExpenses = 0
+  const dates = rows.map((r) => r.entry_date.slice(0, 10)).sort()
+  const periodFrom = dates[0]
+  const periodTo = dates[dates.length - 1]
+
+  const report_data: ManualPnlReportRow[] = rows.map((r) => {
+    totalSales += Number(r.sales_amount) || 0
+    totalCost += Number(r.cost_amount) || 0
+    totalExpenses += Number(r.expense_amount) || 0
+    return {
+      entry_date: r.entry_date.slice(0, 10),
+      description: r.description,
+      sales_amount: Number(r.sales_amount) || 0,
+      cost_amount: Number(r.cost_amount) || 0,
+      expense_amount: Number(r.expense_amount) || 0,
+      profit_amount: Number(r.profit_amount) || 0,
+      notes: r.notes,
+    }
+  })
+
+  const netProfit = totalSales - totalCost - totalExpenses
+  const title = buildManualPnlReportTitle(periodFrom, periodTo)
+
+  const { data, error } = await getClient()
+    .from('manual_pnl_reports')
+    .insert({
+      title,
+      period_from: periodFrom,
+      period_to: periodTo,
+      total_sales: totalSales,
+      total_cost: totalCost,
+      total_expenses: totalExpenses,
+      net_profit: netProfit,
+      row_count: rows.length,
+      report_data,
+    })
+    .select()
+    .single()
+
+  if (error) throw error
+  await clearAllManualProfitLossEntries()
+  return mapManualPnlReport(data as Record<string, unknown>, true)
+}
+
+export async function getManualPnlReportSummaries(): Promise<ManualPnlReportSummary[]> {
+  const { data, error } = await getClient()
+    .from('manual_pnl_reports')
+    .select(
+      'id, title, period_from, period_to, total_sales, total_cost, total_expenses, net_profit, row_count, archived_at'
+    )
+    .order('archived_at', { ascending: false })
+  if (error) throw error
+  return (data || []).map((r) => mapManualPnlReportSummary(r as Record<string, unknown>))
+}
+
+export async function getManualPnlReportById(id: string): Promise<ManualPnlReport> {
+  const { data, error } = await getClient().from('manual_pnl_reports').select('*').eq('id', id).single()
+  if (error) throw error
+  return mapManualPnlReport(data as Record<string, unknown>, true)
+}
+
+export async function deleteManualPnlReport(id: string): Promise<void> {
+  const { error } = await getClient().from('manual_pnl_reports').delete().eq('id', id)
+  if (error) throw error
+}
+
+export async function clearReceivableCheque(paymentId: string): Promise<void> {
+  const ledger = await getLedger()
+  if (!ledger) throw new Error('No active ledger. Set up opening balances first.')
+
+  const { data: payment, error: fetchError } = await getClient()
+    .from('receivable_payments')
+    .select('*')
+    .eq('id', paymentId)
+    .single()
+  if (fetchError) throw fetchError
+  if (!payment) throw new Error('Payment not found.')
+  if (payment.method !== 'cheque') throw new Error('This is not a cheque payment.')
+  if (payment.cheque_status === 'cleared') throw new Error('Cheque is already cleared.')
+
+  // Update ledger: move from on_cheque to cash_in_hand
+  await updateLedger({
+    on_cheque: ledger.on_cheque - Number(payment.amount),
+    cash_in_hand: ledger.cash_in_hand + Number(payment.amount),
+  })
+
+  // Update payment status
+  const { error: updateError } = await getClient()
+    .from('receivable_payments')
+    .update({ cheque_status: 'cleared' })
+    .eq('id', paymentId)
+  if (updateError) throw updateError
+
+  // Log cash transaction
+  await logCashTransaction('receivable_cheque_cleared', 'receivable_payment', paymentId, Number(payment.amount), 'in', `Cheque cleared: ${payment.cheque_number || 'N/A'}`)
+}
+
+export async function clearPayableCheque(paymentId: string): Promise<void> {
+  const ledger = await getLedger()
+  if (!ledger) throw new Error('No active ledger. Set up opening balances first.')
+
+  const { data: payment, error: fetchError } = await getClient()
+    .from('payable_payments')
+    .select('*')
+    .eq('id', paymentId)
+    .single()
+  if (fetchError) throw fetchError
+  if (!payment) throw new Error('Payment not found.')
+  if (payment.method !== 'cheque') throw new Error('This is not a cheque payment.')
+  if (payment.cheque_status === 'cleared') throw new Error('Cheque is already cleared.')
+
+  // Update ledger: move from on_cheque to cash_in_hand (cheque was already deducted from on_cheque when paid)
+  // When cleared, the amount is removed from on_cheque (it was already there) and cash_in_hand decreases
+  await updateLedger({
+    on_cheque: ledger.on_cheque + Number(payment.amount),
+    cash_in_hand: ledger.cash_in_hand - Number(payment.amount),
+  })
+
+  // Update payment status
+  const { error: updateError } = await getClient()
+    .from('payable_payments')
+    .update({ cheque_status: 'cleared' })
+    .eq('id', paymentId)
+  if (updateError) throw updateError
+
+  // Log cash transaction
+  await logCashTransaction('payable_cheque_cleared', 'payable_payment', paymentId, Number(payment.amount), 'out', `Cheque cleared: ${payment.cheque_number || 'N/A'}`)
+}
+
+export async function confirmChequeSale(saleId: string): Promise<void> {
+  const ledger = await getLedger()
+  if (!ledger) throw new Error('No active ledger. Set up opening balances first.')
+
+  const { data: sale, error: fetchError } = await getClient()
+    .from('sales')
+    .select('*')
+    .eq('id', saleId)
+    .single()
+  if (fetchError) throw fetchError
+  if (!sale) throw new Error('Sale not found.')
+  if (sale.payment_type !== 'chequesale') throw new Error('This is not a cheque sale.')
+  if (sale.cheque_confirmed) throw new Error('Cheque sale is already confirmed.')
+
+  // Update ledger: transfer to cash_in_hand
+  await updateLedger({
+    cash_in_hand: ledger.cash_in_hand + Number(sale.total_sales),
+  })
+
+  // Update sale status
+  const { error: updateError } = await getClient()
+    .from('sales')
+    .update({ cheque_confirmed: true })
+    .eq('id', saleId)
+  if (updateError) throw updateError
+
+  // Log cash transaction
+  await logCashTransaction('sale_cheque_confirmed', 'sale', saleId, Number(sale.total_sales), 'in', `Cheque confirmed: ${sale.invoice_number} - ${sale.customer_name}`)
 }

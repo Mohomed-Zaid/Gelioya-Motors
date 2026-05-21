@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react'
-import { HandCoins, Search, Trash2, ChevronDown, ChevronUp, FileText } from 'lucide-react'
+import { HandCoins, Search, Trash2, ChevronDown, ChevronUp, FileText, Plus, Users } from 'lucide-react'
 import { AppShell } from '../layout/AppShell'
 import { Modal } from '../components/Modal'
 import { SummaryCard } from '../components/SummaryCard'
-import { getPayables, createPayablePayment, deletePayablePayment, getPartyOffsets, clearPayableCheque } from '../services/businessService'
+import { getPayables, createPayablePayment, deletePayablePayment, getPartyOffsets, clearPayableCheque, createPurchase, getNextNumber, createPartyIfMissing, getClient } from '../services/businessService'
 import type { PayableWithPurchase } from '../types'
 import type { PartyOffsetWithPurchase } from '../services/businessService'
-import { formatCurrency, formatDate, formatChequeNumber, parseChequeNumber } from '../lib/utils'
+import { formatCurrency, formatDate, formatChequeNumber, parseChequeNumber, generateInvoiceNumber } from '../lib/utils'
 import { CurrencyInput } from '../components/CurrencyInput'
 
 export function PayablesPage() {
@@ -16,9 +16,16 @@ export function PayablesPage() {
   const [selectedPayable, setSelectedPayable] = useState<PayableWithPurchase | null>(null)
   const [showDeletePaymentConfirm, setShowDeletePaymentConfirm] = useState<string | null>(null)
   const [clearingCheque, setClearingCheque] = useState<string | null>(null)
+  const [showManualPayableModal, setShowManualPayableModal] = useState(false)
   const [search, setSearch] = useState('')
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [viewMode, setViewMode] = useState<'invoice' | 'supplier'>('supplier')
+  const [expandedSupplier, setExpandedSupplier] = useState<string | null>(null)
+
+  const [manualPayableSupplier, setManualPayableSupplier] = useState('')
+  const [manualPayableAmount, setManualPayableAmount] = useState('')
+  const [manualPayableNotes, setManualPayableNotes] = useState('')
 
   const [paymentAmount, setPaymentAmount] = useState('')
   const [paymentNotes, setPaymentNotes] = useState('')
@@ -43,6 +50,51 @@ export function PayablesPage() {
   useEffect(() => {
     loadPayables()
   }, [])
+
+  const handleCreateManualPayable = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const amount = parseFloat(manualPayableAmount)
+    if (isNaN(amount) || amount <= 0) {
+      setError('Valid amount greater than zero is required.')
+      return
+    }
+    if (!manualPayableSupplier.trim()) {
+      setError('Supplier name is required.')
+      return
+    }
+
+    setSubmitting(true)
+    try {
+      const nextSeq = await getNextNumber('purchases', 'purchase_number', 'PO')
+      const purchaseNumber = generateInvoiceNumber('PO', nextSeq)
+
+      const partyId = await createPartyIfMissing(manualPayableSupplier.trim())
+
+      const { error } = await getClient()
+        .from('purchases')
+        .insert({
+          purchase_number: purchaseNumber,
+          supplier_name: manualPayableSupplier.trim(),
+          party_id: partyId,
+          total_amount: amount,
+          payment_type: 'credit',
+          notes: manualPayableNotes || 'Manual payable entry',
+        })
+      if (error) throw error
+
+      setShowManualPayableModal(false)
+      setManualPayableSupplier('')
+      setManualPayableAmount('')
+      setManualPayableNotes('')
+      setError('')
+      loadPayables()
+    } catch (err) {
+      console.error(err)
+      setError(err instanceof Error ? err.message : 'Failed to create payable.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
 
   const handlePay = (payable: PayableWithPurchase) => {
     setSelectedPayable(payable)
@@ -107,6 +159,37 @@ export function PayablesPage() {
     (p) => p.supplier_name.toLowerCase().includes(search.toLowerCase()) || p.purchase_number.toLowerCase().includes(search.toLowerCase())
   )
 
+  // Group by supplier
+  const supplierGroups = filtered.reduce((acc, p) => {
+    const supplier = p.supplier_name
+    if (!acc[supplier]) {
+      acc[supplier] = {
+        supplierName: supplier,
+        invoices: [],
+        totalAmount: 0,
+        totalPaid: 0,
+        totalOffset: 0,
+        totalOutstanding: 0
+      }
+    }
+    acc[supplier].invoices.push(p)
+    acc[supplier].totalAmount += Number(p.total_amount)
+    acc[supplier].totalPaid += p.total_paid
+    acc[supplier].totalOffset += p.offset_total || 0
+    acc[supplier].totalOutstanding += Math.max(0, p.outstanding - (p.offset_total || 0))
+    return acc
+  }, {} as Record<string, any>)
+
+  const supplierGroupsArray = Object.values(supplierGroups).map((g: any) => ({
+    supplierName: g.supplierName,
+    invoices: g.invoices,
+    invoiceCount: g.invoices.length,
+    totalAmount: g.totalAmount,
+    totalPaid: g.totalPaid,
+    totalOffset: g.totalOffset,
+    totalOutstanding: g.totalOutstanding
+  }))
+
   const totalOutstanding = filtered.reduce((sum, p) => sum + Math.max(0, p.outstanding - (p.offset_total || 0)), 0)
   const totalPaid = filtered.reduce((sum, p) => sum + p.total_paid, 0)
   const totalOffsets = filtered.reduce((sum, p) => sum + (p.offset_total || 0), 0)
@@ -120,6 +203,13 @@ export function PayablesPage() {
           <p className="text-sm text-slate-300 mt-0.5">Track credit purchases and make supplier payments</p>
         </div>
 
+        <button
+          onClick={() => setShowManualPayableModal(true)}
+          className="flex items-center gap-2 gradient-primary hover:shadow-lg hover:shadow-emerald-500/20 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition-all"
+        >
+          <Plus size={16} /> Manual Payable
+        </button>
+
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
           <SummaryCard title="Total Outstanding" value={formatCurrency(totalOutstanding)} icon={<HandCoins size={20} />} color="red" />
           <SummaryCard title="Total Paid" value={formatCurrency(totalPaid)} icon={<span className="text-xs font-bold">PAY</span>} color="green" />
@@ -128,7 +218,7 @@ export function PayablesPage() {
         </div>
 
         <div className="surface rounded-2xl p-4">
-          <div className="flex flex-col sm:flex-row gap-3">
+          <div className="flex flex-col sm:flex-row gap-3 justify-between items-center">
             <div className="relative flex-1">
               <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
@@ -139,9 +229,25 @@ export function PayablesPage() {
                 className="w-full pl-10 pr-4 py-2.5 input-surface rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
               />
             </div>
+            <div className="flex items-center gap-1 surface rounded-xl p-1">
+              <button
+                onClick={() => setViewMode('supplier')}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${viewMode === 'supplier' ? 'bg-emerald-500/15 text-emerald-200 border border-emerald-900/40' : 'text-slate-400 hover:text-slate-200'}`}
+              >
+                <Users size={14} /> By Supplier
+              </button>
+              <button
+                onClick={() => setViewMode('invoice')}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${viewMode === 'invoice' ? 'bg-emerald-500/15 text-emerald-200 border border-emerald-900/40' : 'text-slate-400 hover:text-slate-200'}`}
+              >
+                <FileText size={14} /> By Invoice
+              </button>
+            </div>
           </div>
         </div>
 
+        {/* By Invoice View */}
+        {viewMode === 'invoice' && (
         <div className="surface rounded-2xl overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -265,6 +371,103 @@ export function PayablesPage() {
             </div>
           )}
         </div>
+        )}
+
+        {/* By Supplier View */}
+        {viewMode === 'supplier' && (
+          <div className="space-y-4">
+            {loading ? (
+              <div className="surface rounded-2xl p-12 text-center text-slate-400">Loading...</div>
+            ) : supplierGroupsArray.length === 0 ? (
+              <div className="surface rounded-2xl p-12 text-center text-slate-400">No credit purchases found</div>
+            ) : supplierGroupsArray.map((group) => {
+              const isExpanded = expandedSupplier === group.supplierName
+              return (
+                <div key={group.supplierName} className="surface rounded-2xl overflow-hidden">
+                  {/* Supplier Header */}
+                  <div
+                    className="px-5 py-4 flex items-center justify-between cursor-pointer hover:bg-emerald-950/25 transition-colors"
+                    onClick={() => setExpandedSupplier(isExpanded ? null : group.supplierName)}
+                  >
+                    <div className="flex items-center gap-4">
+                      <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-900/40 flex items-center justify-center text-amber-200 font-bold text-sm">
+                        {group.supplierName.charAt(0).toUpperCase()}
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-100">{group.supplierName}</h3>
+                        <p className="text-xs text-slate-400">{group.invoiceCount} invoice(s)</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-6">
+                      <div className="text-right">
+                        <p className="text-xs text-slate-400">Total Purchases</p>
+                        <p className="text-sm font-semibold text-slate-100">{formatCurrency(group.totalAmount)}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-xs text-slate-400">Paid</p>
+                        <p className="text-sm font-semibold text-emerald-300">{formatCurrency(group.totalPaid)}</p>
+                      </div>
+                      {group.totalOffset > 0 && (
+                        <div className="text-right">
+                          <p className="text-xs text-slate-400">Offset</p>
+                          <p className="text-sm font-semibold text-blue-300">{formatCurrency(group.totalOffset)}</p>
+                        </div>
+                      )}
+                      <div className="text-right">
+                        <p className="text-xs text-slate-400">Outstanding</p>
+                        <p className="text-sm font-bold text-red-300">{formatCurrency(group.totalOutstanding)}</p>
+                      </div>
+                      {isExpanded ? <ChevronUp size={18} className="text-slate-400" /> : <ChevronDown size={18} className="text-slate-400" />}
+                    </div>
+                  </div>
+
+                  {/* Expanded Invoice List */}
+                  {isExpanded && (
+                    <div className="border-t border-emerald-900/30">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="bg-emerald-950/30 border-b border-emerald-900/20">
+                            <th className="text-left px-5 py-2.5 font-semibold text-slate-500 text-xs uppercase tracking-wider">Purchase</th>
+                            <th className="text-right px-5 py-2.5 font-semibold text-slate-500 text-xs uppercase tracking-wider">Total</th>
+                            <th className="text-right px-5 py-2.5 font-semibold text-slate-500 text-xs uppercase tracking-wider">Paid</th>
+                            <th className="text-right px-5 py-2.5 font-semibold text-slate-500 text-xs uppercase tracking-wider">Offset</th>
+                            <th className="text-right px-5 py-2.5 font-semibold text-slate-500 text-xs uppercase tracking-wider">Outstanding</th>
+                            <th className="text-center px-5 py-2.5 font-semibold text-slate-500 text-xs uppercase tracking-wider">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-emerald-900/20">
+                          {group.invoices.map((p: PayableWithPurchase) => {
+                            const adjustedOutstanding = Math.max(0, p.outstanding - (p.offset_total || 0))
+                            return (
+                              <tr key={p.id} className="hover:bg-emerald-950/25 transition-colors">
+                                <td className="px-5 py-3 font-mono text-amber-200 font-semibold">{p.purchase_number}</td>
+                                <td className="px-5 py-3 text-right font-bold text-slate-100">{formatCurrency(p.total_amount)}</td>
+                                <td className="px-5 py-3 text-right text-emerald-300 font-semibold">{formatCurrency(p.total_paid)}</td>
+                                <td className="px-5 py-3 text-right text-blue-300 font-semibold">{formatCurrency(p.offset_total || 0)}</td>
+                                <td className="px-5 py-3 text-right text-red-300 font-bold">{formatCurrency(adjustedOutstanding)}</td>
+                                <td className="px-5 py-3 text-center">
+                                  {adjustedOutstanding > 0 && (
+                                    <button
+                                      onClick={() => handlePay(p)}
+                                      className="p-1.5 rounded-lg text-slate-400 hover:text-amber-300 hover:bg-amber-950/40 transition-all"
+                                      title="Make Payment"
+                                    >
+                                      <span className="text-[10px] font-bold">PAY</span>
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
 
       </div>
 
@@ -478,6 +681,64 @@ export function PayablesPage() {
             </button>
           </div>
         </div>
+      </Modal>
+
+      {/* Manual Payable Creation Modal */}
+      <Modal isOpen={showManualPayableModal} onClose={() => setShowManualPayableModal(false)} title="Create Manual Payable">
+        <form onSubmit={handleCreateManualPayable} className="space-y-4">
+          {error && (
+            <div className="p-3 bg-red-950/30 border border-red-900/40 rounded-xl text-sm text-red-200">
+              {error}
+            </div>
+          )}
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1">Supplier Name</label>
+            <input
+              type="text"
+              value={manualPayableSupplier}
+              onChange={(e) => setManualPayableSupplier(e.target.value)}
+              className="w-full px-4 py-2.5 input-surface rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1">Amount</label>
+            <CurrencyInput
+              value={manualPayableAmount}
+              onChange={setManualPayableAmount}
+              className="w-full px-4 py-2.5 input-surface rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1">Notes</label>
+            <textarea
+              value={manualPayableNotes}
+              onChange={(e) => setManualPayableNotes(e.target.value)}
+              className="w-full px-4 py-2.5 input-surface rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none resize-none"
+              rows={3}
+            />
+          </div>
+          <div className="bg-blue-950/30 border border-blue-900/30 rounded-xl p-3">
+            <p className="text-xs text-blue-200">This creates a payable entry without affecting inventory or cash in hand. Use for manual credit entries.</p>
+          </div>
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={() => setShowManualPayableModal(false)}
+              className="flex-1 px-4 py-3 border border-emerald-900/40 bg-emerald-950/20 text-slate-100 rounded-xl text-sm font-semibold hover:bg-emerald-950/35 transition-all"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              className="flex-1 px-4 py-3 gradient-primary text-white rounded-xl text-sm font-semibold hover:shadow-lg hover:shadow-emerald-500/20 transition-all disabled:opacity-50"
+            >
+              {submitting ? 'Creating...' : 'Create Payable'}
+            </button>
+          </div>
+        </form>
       </Modal>
     </AppShell>
   )

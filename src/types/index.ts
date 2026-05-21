@@ -172,6 +172,7 @@ export interface CreatePurchaseInput {
   total_amount: number
   payment_type: PaymentType
   notes?: string
+  offset_enabled?: boolean
 }
 
 export interface CreateReceivablePaymentInput {

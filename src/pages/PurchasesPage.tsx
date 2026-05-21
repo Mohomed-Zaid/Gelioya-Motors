@@ -29,6 +29,7 @@ export function PurchasesPage() {
   const [totalAmount, setTotalAmount] = useState('')
   const [paymentType, setPaymentType] = useState<PaymentType>('cash')
   const [notes, setNotes] = useState('')
+  const [offsetEnabled, setOffsetEnabled] = useState(true)
 
   const loadPurchases = async () => {
     try {
@@ -90,6 +91,7 @@ export function PurchasesPage() {
     setTotalAmount('')
     setPaymentType('cash')
     setNotes('')
+    setOffsetEnabled(true)
     setError('')
     setEditingPurchase(null)
   }
@@ -127,6 +129,7 @@ export function PurchasesPage() {
           total_amount: amount,
           payment_type: paymentType,
           notes: notes || undefined,
+          offset_enabled: offsetEnabled,
         })
       } else {
         await createPurchase({
@@ -135,6 +138,7 @@ export function PurchasesPage() {
           total_amount: amount,
           payment_type: paymentType,
           notes: notes || undefined,
+          offset_enabled: offsetEnabled,
         })
       }
       resetForm()
@@ -366,8 +370,24 @@ export function PurchasesPage() {
             </div>
           )}
 
+          {/* Offset Toggle */}
+          {partyId && creditCustomers.some((c) => c.partyId === partyId) && (
+            <div className="flex items-center gap-3 p-3 bg-blue-950/20 border border-blue-900/30 rounded-xl">
+              <input
+                type="checkbox"
+                id="offsetToggle"
+                checked={offsetEnabled}
+                onChange={(e) => setOffsetEnabled(e.target.checked)}
+                className="w-4 h-4 rounded border-emerald-900/40 bg-emerald-950/30 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-0"
+              />
+              <label htmlFor="offsetToggle" className="text-sm text-slate-200 cursor-pointer">
+                Enable offset against receivable
+              </label>
+            </div>
+          )}
+
           {/* Offset Calculation Box */}
-          {partyId && outstandingReceivable > 0 && purchaseAmount > 0 && (
+          {partyId && outstandingReceivable > 0 && purchaseAmount > 0 && offsetEnabled && (
             <div className="bg-blue-950/30 border border-blue-800/40 rounded-xl p-4 space-y-2">
               <h4 className="text-xs font-bold uppercase tracking-wider text-blue-300">Party Offset Calculation</h4>
               <div className="grid grid-cols-2 gap-2 text-sm">

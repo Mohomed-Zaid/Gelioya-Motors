@@ -380,12 +380,6 @@ export function ReceivablesPage() {
             notes: `Overpayment from Pay All - ${payAllCustomer.customerName}`,
           })
         if (payableError) throw payableError
-
-        // Update ledger: increase payables_total
-        const ledger = await getLedger()
-        await updateLedger({
-          payables_total: ledger!.payables_total + remaining,
-        })
       }
 
       setShowPayAllModal(false)

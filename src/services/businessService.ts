@@ -684,11 +684,11 @@ export async function createPurchase(input: CreatePurchaseInput): Promise<Purcha
     partyId = await createPartyIfMissing(input.supplier_name)
   }
 
-  // Calculate offset if party has outstanding receivable
+  // Calculate offset if party has outstanding receivable and offset is enabled
   let offsetAmount = 0
   let remainingAmount = input.total_amount
 
-  if (partyId) {
+  if (partyId && input.offset_enabled !== false) {
     const outstanding = await getPartyOutstandingReceivable(partyId)
     if (outstanding > 0) {
       offsetAmount = Math.min(outstanding, input.total_amount)
@@ -844,7 +844,7 @@ export async function updatePurchase(id: string, input: CreatePurchaseInput): Pr
   let offsetAmount = 0
   let remainingAmount = input.total_amount
 
-  if (partyId) {
+  if (partyId && input.offset_enabled !== false) {
     const outstanding = await getPartyOutstandingReceivable(partyId)
     if (outstanding > 0) {
       offsetAmount = Math.min(outstanding, input.total_amount)
@@ -1104,12 +1104,6 @@ export async function collectReceivablePayment(input: CreateReceivablePaymentInp
       console.error('Failed to create payable for overpayment:', payableError)
       throw payableError
     }
-
-    // Update ledger: increase payables_total
-    const currentLedger = await getLedger()
-    await updateLedger({
-      payables_total: currentLedger!.payables_total + overpaymentAmount,
-    })
     console.log('Payable created successfully for overpayment')
   }
 

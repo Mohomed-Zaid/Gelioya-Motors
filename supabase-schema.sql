@@ -78,7 +78,8 @@ CREATE TABLE purchases (
   payment_type TEXT NOT NULL CHECK (payment_type IN ('cash', 'credit')),
   is_finalized BOOLEAN NOT NULL DEFAULT false,
   notes TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- ============================================
@@ -356,6 +357,7 @@ CREATE TRIGGER purchases_updated_at
 -- ============================================
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS is_finalized BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE purchases ADD COLUMN IF NOT EXISTS is_finalized BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE purchases ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS is_finalized BOOLEAN NOT NULL DEFAULT true;
 ALTER TABLE monthly_snapshots ADD COLUMN IF NOT EXISTS total_purchases NUMERIC(15,2) NOT NULL DEFAULT 0;
 ALTER TABLE monthly_snapshots ADD COLUMN IF NOT EXISTS total_receivables_at_close NUMERIC(15,2) NOT NULL DEFAULT 0;

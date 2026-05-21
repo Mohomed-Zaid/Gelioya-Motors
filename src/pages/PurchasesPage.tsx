@@ -3,7 +3,7 @@ import { Truck, Plus, Search, FileText, Pencil, Trash2 } from 'lucide-react'
 import { AppShell } from '../layout/AppShell'
 import { Modal } from '../components/Modal'
 import { SummaryCard } from '../components/SummaryCard'
-import { createPurchase, updatePurchase, deletePurchase, getPurchases, getReceivables, getPartyOutstandingReceivable, getParties } from '../services/businessService'
+import { createPurchase, updatePurchase, deletePurchase, getPurchases, getReceivables, getPartyOutstandingReceivable, getParties, getPurchaseOffsetTotal } from '../services/businessService'
 import type { Purchase, PaymentType, Party } from '../types'
 import { formatCurrency, formatDate, parseCurrencyInput } from '../lib/utils'
 import { CurrencyInput } from '../components/CurrencyInput'
@@ -96,7 +96,7 @@ export function PurchasesPage() {
     setEditingPurchase(null)
   }
 
-  const openEditModal = (purchase: Purchase) => {
+  const openEditModal = async (purchase: Purchase) => {
     setEditingPurchase(purchase)
     setSupplierName(purchase.supplier_name)
     setPartyId(purchase.party_id || null)
@@ -104,12 +104,34 @@ export function PurchasesPage() {
     setPaymentType(purchase.payment_type)
     setNotes(purchase.notes || '')
     setError('')
+    setOffsetEnabled(false)
     setShowModal(true)
+
+    if (purchase.party_id) {
+      try {
+        const totalOffset = await getPurchaseOffsetTotal(purchase.id)
+        setOffsetEnabled(totalOffset > 0)
+      } catch (err) {
+        console.error('Failed to load purchase offset state', err)
+      }
+    }
   }
 
   const openCreateModal = () => {
     resetForm()
     setShowModal(true)
+  }
+
+  const getErrorMessage = (err: unknown, fallback: string) => {
+    if (err instanceof Error) return err.message
+    if (err && typeof err === 'object' && 'message' in err && typeof (err as any).message === 'string') {
+      return (err as any).message
+    }
+    try {
+      return JSON.stringify(err)
+    } catch {
+      return fallback
+    }
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -145,7 +167,7 @@ export function PurchasesPage() {
       setShowModal(false)
       loadPurchases()
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : `Failed to ${editingPurchase ? 'update' : 'create'} purchase.`)
+      setError(getErrorMessage(err, `Failed to ${editingPurchase ? 'update' : 'create'} purchase.`))
     } finally {
       setSubmitting(false)
     }

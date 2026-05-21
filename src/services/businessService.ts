@@ -394,6 +394,15 @@ export async function getPartyOutstandingReceivable(partyId: string): Promise<nu
   return Math.max(0, outstanding)
 }
 
+export async function getPurchaseOffsetTotal(purchaseId: string): Promise<number> {
+  const { data: offsets, error } = await getClient()
+    .from('party_offsets')
+    .select('amount')
+    .eq('purchase_id', purchaseId)
+  if (error) throw error
+  return (offsets || []).reduce((sum, o) => sum + Number(o.amount), 0)
+}
+
 async function createPartyOffset(partyId: string, purchaseId: string, amount: number): Promise<PartyOffset> {
   const { data, error } = await getClient()
     .from('party_offsets')

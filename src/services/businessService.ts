@@ -32,6 +32,12 @@ import type {
   ManualPnlReport,
   ManualPnlReportRow,
   ManualPnlReportSummary,
+  CustomerLedgerTransaction,
+  CustomerLedgerSummary,
+  CustomerLedgerTransactionType,
+  Cheque,
+  CreateChequeInput,
+  UpdateChequeInput,
 } from '../types'
 
 export function getClient() {
@@ -2219,4 +2225,230 @@ export async function confirmChequeSale(saleId: string): Promise<void> {
 
   // Log cash transaction
   await logCashTransaction('sale_cheque_confirmed', 'sale', saleId, Number(sale.total_sales), 'in', `Cheque confirmed: ${sale.invoice_number} - ${sale.customer_name}`)
+}
+
+// ============================================
+// CHEQUE MANAGEMENT
+// ============================================
+export async function getCheques(): Promise<Cheque[]> {
+  const { data, error } = await getClient().from('cheques').select('*').order('cheque_bought_date', { ascending: false })
+  if (error) throw error
+  return data.map((c: any) => ({
+    ...c,
+    amount: Number(c.amount)
+  }))
+}
+
+export async function getChequeById(id: string): Promise<Cheque> {
+  const { data, error } = await getClient().from('cheques').select('*').eq('id', id).single()
+  if (error) throw error
+  return { ...data, amount: Number(data.amount) }
+}
+
+export async function createCheque(input: CreateChequeInput): Promise<Cheque> {
+  const { data, error } = await getClient().from('cheques').insert([input]).select('*').single()
+  if (error) throw error
+  return { ...data, amount: Number(data.amount) }
+}
+
+export async function updateCheque(id: string, input: UpdateChequeInput): Promise<Cheque> {
+  const existing = await getChequeById(id)
+  const wasCleared = existing.status === 'cleared'
+  const willBeCleared = (input.status ?? existing.status) === 'cleared'
+
+  // Validate: if status is not pending, need cheque_given_to_type and cheque_given_to_name
+  if ((input.status && input.status !== 'pending') || (!input.status && existing.status !== 'pending')) {
+    const givenToType = input.cheque_given_to_type !== undefined ? input.cheque_given_to_type : existing.cheque_given_to_type
+    const givenToName = input.cheque_given_to_name !== undefined ? input.cheque_given_to_name : existing.cheque_given_to_name
+    if (!givenToType || !givenToName?.trim()) {
+      throw new Error('When cheque status is not pending, both "Given To Type" and "Given To Name" are required.')
+    }
+  }
+
+  const ledger = await getLedger()
+
+  if (willBeCleared && !wasCleared && ledger) {
+    // If status is changing to cleared, add to cash_in_hand
+    const amount = input.amount !== undefined ? Number(input.amount) : Number(existing.amount)
+    await updateLedger({
+      cash_in_hand: ledger.cash_in_hand + amount
+    })
+    await logCashTransaction('cheque_cleared', 'cheque', id, amount, 'in', `Cheque #${existing.cheque_number} cleared`)
+  } else if (!willBeCleared && wasCleared && ledger) {
+    // If status is changing from cleared, remove from cash_in_hand
+    const amount = Number(existing.amount)
+    await updateLedger({
+      cash_in_hand: ledger.cash_in_hand - amount
+    })
+    // Delete the cash transaction for the cheque cleared
+    await getClient().from('cash_transactions').delete().eq('reference_id', id).eq('reference_type', 'cheque')
+  }
+
+  const { data, error } = await getClient().from('cheques').update(input).eq('id', id).select('*').single()
+  if (error) throw error
+  return { ...data, amount: Number(data.amount) }
+}
+
+// ============================================
+// CUSTOMER LEDGER / FINANCIAL PROFILE
+// ============================================
+export async function getCustomerLedgerTransactions(
+  partyId: string,
+  dateFrom?: string,
+  dateTo?: string,
+  transactionType?: CustomerLedgerTransactionType
+): Promise<{ transactions: CustomerLedgerTransaction[], summary: CustomerLedgerSummary }> {
+  const allTransactions: CustomerLedgerTransaction[] = [];
+
+  // 1. Fetch Credit Sales for this party
+  const { data: sales } = await getClient().from('sales').select('*').eq('party_id', partyId).eq('payment_type', 'credit');
+  if (sales) {
+    sales.forEach((sale) => {
+      allTransactions.push({
+        id: sale.id,
+        date: sale.invoice_date || sale.created_at.slice(0, 10),
+        type: 'sale',
+        description: `Invoice ${sale.invoice_number}`,
+        debit: Number(sale.total_sales),
+        credit: 0,
+        referenceId: sale.id,
+      });
+    });
+  }
+
+  // 2. Fetch Receivable Payments for this party's sales
+  const saleIds = (sales || []).map((s) => s.id);
+  if (saleIds.length > 0) {
+    const { data: payments } = await getClient().from('receivable_payments').select('*').in('sale_id', saleIds);
+    if (payments) {
+      payments.forEach((payment) => {
+        allTransactions.push({
+          id: payment.id,
+          date: payment.payment_date || payment.created_at.slice(0, 10),
+          type: 'payment',
+          description: `Payment (${payment.method || 'cash'})`,
+          debit: 0,
+          credit: Number(payment.amount),
+          referenceId: payment.id,
+        });
+      });
+    }
+  }
+
+  // 3. Fetch Party Offsets
+  const { data: offsets } = await getClient().from('party_offsets').select('*, purchases!inner(purchase_number)').eq('party_id', partyId);
+  if (offsets) {
+    (offsets as any[]).forEach((offset) => {
+      allTransactions.push({
+        id: offset.id,
+        date: offset.created_at.slice(0, 10),
+        type: 'offset',
+        description: `Offset - ${offset.purchases.purchase_number}`,
+        debit: 0,
+        credit: Number(offset.amount),
+        referenceId: offset.id,
+      });
+    });
+  }
+
+  // 4. Fetch Purchases from this party
+  const { data: purchases } = await getClient().from('purchases').select('*').eq('party_id', partyId);
+  if (purchases) {
+    purchases.forEach((purchase) => {
+      allTransactions.push({
+        id: purchase.id,
+        date: purchase.created_at.slice(0, 10),
+        type: 'purchase',
+        description: `Purchase ${purchase.purchase_number}`,
+        debit: 0,
+        credit: Number(purchase.total_amount),
+        referenceId: purchase.id,
+      });
+    });
+  }
+
+  // 5. Fetch Returns from this party
+  const { data: returns } = await getClient().from('returns').select('*').eq('party_id', partyId);
+  if (returns) {
+    returns.forEach((ret) => {
+      allTransactions.push({
+        id: ret.id,
+        date: ret.return_date || ret.created_at.slice(0, 10),
+        type: 'return',
+        description: `Return ${ret.return_number}`,
+        debit: 0,
+        credit: Number(ret.total_refund),
+        referenceId: ret.id,
+      });
+    });
+  }
+
+  // 6. Fetch Cheques from this party
+  const { data: cheques } = await getClient().from('cheques').select('*').eq('given_by', (sales && sales[0]?.customer_name) || '');
+  if (cheques) {
+    cheques.forEach((cheque: any) => {
+      allTransactions.push({
+        id: cheque.id,
+        date: cheque.cheque_bought_date,
+        type: 'cheque',
+        description: `Cheque ${cheque.cheque_number} (${cheque.status})`,
+        debit: cheque.status === 'cleared' ? Number(cheque.amount) : 0,
+        credit: 0,
+        referenceId: cheque.id,
+      });
+    });
+  }
+
+  // Filter by date range
+  let filteredTransactions = [...allTransactions];
+  if (dateFrom) {
+    filteredTransactions = filteredTransactions.filter((t) => t.date >= dateFrom);
+  }
+  if (dateTo) {
+    filteredTransactions = filteredTransactions.filter((t) => t.date <= dateTo);
+  }
+
+  // Filter by transaction type
+  if (transactionType) {
+    filteredTransactions = filteredTransactions.filter((t) => t.type === transactionType);
+  }
+
+  // Sort by date
+  filteredTransactions.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+  // Calculate summary
+  const totalCreditSales = filteredTransactions.filter((t) => t.type === 'sale').reduce((sum, t) => sum + t.debit, 0);
+  const totalPaymentsReceived = filteredTransactions.filter((t) => t.type === 'payment').reduce((sum, t) => sum + t.credit, 0);
+  const totalPurchases = filteredTransactions.filter((t) => t.type === 'purchase').reduce((sum, t) => sum + t.credit, 0);
+  const totalOffsets = filteredTransactions.filter((t) => t.type === 'offset').reduce((sum, t) => sum + t.credit, 0);
+  const netBalance = totalCreditSales - totalPaymentsReceived - totalOffsets;
+
+  const summary: CustomerLedgerSummary = {
+    totalCreditSales,
+    totalPaymentsReceived,
+    totalPurchases,
+    totalOffsets,
+    netBalance,
+  };
+
+  return { transactions: filteredTransactions, summary };
+}
+
+export async function deleteCheque(id: string): Promise<void> {
+  const existing = await getChequeById(id);
+  if (!existing) throw new Error('Cheque not found.');
+
+  // If cheque was cleared, reverse the cash impact
+  if (existing.status === 'cleared') {
+    const ledger = await getLedger();
+    if (ledger) {
+      await updateLedger({
+        cash_in_hand: ledger.cash_in_hand - Number(existing.amount),
+      });
+      await getClient().from('cash_transactions').delete().eq('reference_id', id).eq('reference_type', 'cheque');
+    }
+  }
+
+  const { error } = await getClient().from('cheques').delete().eq('id', id);
+  if (error) throw error;
 }

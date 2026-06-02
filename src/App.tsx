@@ -17,6 +17,8 @@ import { LandingPage } from './pages/LandingPage'
 import { ReturnsPage } from './pages/ReturnsPage'
 import { AdminPage } from './pages/AdminPage'
 import { ManualProfitLossPage } from './pages/ManualProfitLossPage'
+import { ChequesPage } from './pages/ChequesPage'
+import { CustomerAccountStatementsPage } from './pages/CustomerAccountStatementsPage'
 
 function App() {
   return (
@@ -39,6 +41,8 @@ function App() {
           <Route path="/reports" element={<ProtectedRoute><ReportsPage /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
           <Route path="/admin" element={<ProtectedRoute><AdminPage /></ProtectedRoute>} />
+          <Route path="/cheques" element={<ProtectedRoute><ChequesPage /></ProtectedRoute>} />
+          <Route path="/customer-statements" element={<ProtectedRoute><CustomerAccountStatementsPage /></ProtectedRoute>} />
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </BrowserRouter>

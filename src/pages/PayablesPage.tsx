@@ -3,7 +3,7 @@ import { HandCoins, Search, Trash2, ChevronDown, ChevronUp, FileText, Plus, User
 import { AppShell } from '../layout/AppShell'
 import { Modal } from '../components/Modal'
 import { SummaryCard } from '../components/SummaryCard'
-import { getPayables, createPayablePayment, deletePayablePayment, getPartyOffsets, clearPayableCheque, createPurchase, getNextNumber, createPartyIfMissing, getClient } from '../services/businessService'
+import { getPayables, createPayablePayment, deletePayablePayment, deletePurchase, getPartyOffsets, clearPayableCheque, createPurchase, getNextNumber, createPartyIfMissing, getClient } from '../services/businessService'
 import type { PayableWithPurchase } from '../types'
 import type { PartyOffsetWithPurchase } from '../services/businessService'
 import { formatCurrency, formatDate, formatChequeNumber, parseChequeNumber, generateInvoiceNumber } from '../lib/utils'
@@ -15,6 +15,7 @@ export function PayablesPage() {
   const [showPaymentModal, setShowPaymentModal] = useState(false)
   const [selectedPayable, setSelectedPayable] = useState<PayableWithPurchase | null>(null)
   const [showDeletePaymentConfirm, setShowDeletePaymentConfirm] = useState<string | null>(null)
+  const [showDeletePayableConfirm, setShowDeletePayableConfirm] = useState<string | null>(null)
   const [clearingCheque, setClearingCheque] = useState<string | null>(null)
   const [showManualPayableModal, setShowManualPayableModal] = useState(false)
   const [search, setSearch] = useState('')
@@ -327,6 +328,13 @@ export function PayablesPage() {
                                 <span className="text-[10px] font-bold">PAY</span>
                               </button>
                             )}
+                            <button
+                              onClick={() => setShowDeletePayableConfirm(p.id)}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-red-300 hover:bg-red-950/40 transition-all"
+                              title="Delete Payable"
+                            >
+                              <Trash2 size={14} />
+                            </button>
                           </div>
                         </td>
                       </tr>
@@ -446,15 +454,24 @@ export function PayablesPage() {
                                 <td className="px-5 py-3 text-right text-blue-300 font-semibold">{formatCurrency(p.offset_total || 0)}</td>
                                 <td className="px-5 py-3 text-right text-red-300 font-bold">{formatCurrency(adjustedOutstanding)}</td>
                                 <td className="px-5 py-3 text-center">
-                                  {adjustedOutstanding > 0 && (
+                                  <div className="flex items-center justify-center gap-1">
+                                    {adjustedOutstanding > 0 && (
+                                      <button
+                                        onClick={() => handlePay(p)}
+                                        className="p-1.5 rounded-lg text-slate-400 hover:text-amber-300 hover:bg-amber-950/40 transition-all"
+                                        title="Make Payment"
+                                      >
+                                        <span className="text-[10px] font-bold">PAY</span>
+                                      </button>
+                                    )}
                                     <button
-                                      onClick={() => handlePay(p)}
-                                      className="p-1.5 rounded-lg text-slate-400 hover:text-amber-300 hover:bg-amber-950/40 transition-all"
-                                      title="Make Payment"
+                                      onClick={() => setShowDeletePayableConfirm(p.id)}
+                                      className="p-1.5 rounded-lg text-slate-400 hover:text-red-300 hover:bg-red-950/40 transition-all"
+                                      title="Delete Payable"
                                     >
-                                      <span className="text-[10px] font-bold">PAY</span>
+                                      <Trash2 size={14} />
                                     </button>
-                                  )}
+                                  </div>
                                 </td>
                               </tr>
                             )
@@ -673,6 +690,36 @@ export function PayablesPage() {
                   loadPayables()
                 } catch (err: unknown) {
                   alert(err instanceof Error ? err.message : 'Failed to delete payment.')
+                }
+              }}
+              className="flex-1 px-4 py-3 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold transition-all"
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Delete Payable Confirmation Modal */}
+      <Modal isOpen={!!showDeletePayableConfirm} onClose={() => setShowDeletePayableConfirm(null)} title="Delete Payable">
+        <div className="space-y-4">
+          <p className="text-sm text-slate-300">Are you sure you want to delete this payable entry? This will reverse the purchase ledger impact and remove the credit purchase.</p>
+          <div className="flex gap-3">
+            <button
+              onClick={() => setShowDeletePayableConfirm(null)}
+              className="flex-1 px-4 py-3 border border-emerald-900/40 bg-emerald-950/20 text-slate-100 rounded-xl text-sm font-semibold hover:bg-emerald-950/35 transition-all"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={async () => {
+                if (!showDeletePayableConfirm) return
+                try {
+                  await deletePurchase(showDeletePayableConfirm)
+                  setShowDeletePayableConfirm(null)
+                  loadPayables()
+                } catch (err: unknown) {
+                  alert(err instanceof Error ? err.message : 'Failed to delete payable.')
                 }
               }}
               className="flex-1 px-4 py-3 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold transition-all"

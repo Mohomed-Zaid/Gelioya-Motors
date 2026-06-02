@@ -21,6 +21,8 @@ import {
   ChevronDown,
   ChevronUp,
   Shield,
+  Banknote,
+  FileText,
 } from 'lucide-react'
 
 type NavItem = {
@@ -61,6 +63,8 @@ const navSections: NavSection[] = [
       { to: '/parties', label: 'Parties', icon: Users },
       { to: '/cash-ledger', label: 'Cash Ledger', icon: BookOpen },
       { to: '/expenses', label: 'Expenses', icon: Receipt },
+      { to: '/cheques', label: 'Cheques', icon: Banknote },
+      { to: '/customer-statements', label: 'Customer Statements', icon: FileText },
       { to: '/manual-profit-loss', label: 'Manual P&L', icon: BookMarked },
       { to: '/reports', label: 'Reports', icon: BarChart3 },
     ],

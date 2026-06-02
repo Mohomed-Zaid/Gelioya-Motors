@@ -27,7 +27,7 @@ export function Modal({ isOpen, onClose, title, children, maxWidth, wide }: Moda
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
       <div className="fixed inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className={`relative surface rounded-2xl w-full ${wide ? 'max-w-3xl' : (maxWidth || 'max-w-lg')} max-h-[90vh] overflow-y-auto animate-fade-in`}>
+      <div className={`relative surface rounded-2xl w-full ${wide ? 'max-w-6xl' : (maxWidth || 'max-w-lg')} max-h-[90vh] overflow-y-auto animate-fade-in`}>
         <div className="flex items-center justify-between px-6 py-4 border-b border-emerald-900/30">
           <h2 className="text-lg font-bold text-slate-100">{title}</h2>
           <button

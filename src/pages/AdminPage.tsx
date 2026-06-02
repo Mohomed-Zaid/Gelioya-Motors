@@ -19,6 +19,7 @@ const TABLES = [
   'manual_profit_loss',
   'manual_pnl_reports',
   'monthly_snapshots',
+  'cheques',
 ]
 
 type BackupData = Record<string, unknown[]>

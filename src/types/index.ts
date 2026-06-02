@@ -131,8 +131,8 @@ export interface CreateReturnInput {
   items: ReturnItemInput[]
 }
 
-export type CashTransactionType = 'sale_cash' | 'sale_credit' | 'sale_cheque' | 'sale_cheque_confirmed' | 'purchase_cash' | 'purchase_credit' | 'receivable_collection' | 'payable_payment' | 'expense' | 'return' | 'receivable_cheque_cleared' | 'payable_cheque_cleared'
-export type CashReferenceType = 'sale' | 'purchase' | 'receivable_payment' | 'payable_payment' | 'expense' | 'return'
+export type CashTransactionType = 'sale_cash' | 'sale_credit' | 'sale_cheque' | 'sale_cheque_confirmed' | 'purchase_cash' | 'purchase_credit' | 'receivable_collection' | 'payable_payment' | 'expense' | 'return' | 'receivable_cheque_cleared' | 'payable_cheque_cleared' | 'cheque_cleared'
+export type CashReferenceType = 'sale' | 'purchase' | 'receivable_payment' | 'payable_payment' | 'expense' | 'return' | 'cheque'
 export type CashDirection = 'in' | 'out'
 
 export interface CashTransaction {
@@ -389,4 +389,71 @@ export interface ManualPnlReportSummary {
   net_profit: number
   row_count: number
   archived_at: string
+}
+
+export type ChequeStatus = 'pending' | 'deposited' | 'cleared' | 'bounced'
+export type ChequeGivenToType = 'bank' | 'person'
+
+export interface Cheque {
+  id: string
+  cheque_bought_date: string
+  cheque_date: string
+  given_by: string
+  bank: string
+  cheque_number: string
+  amount: number
+  deposited_to: string | null
+  deposit_date: string | null
+  cheque_given_to_type: ChequeGivenToType | null
+  cheque_given_to_name: string | null
+  status: ChequeStatus
+  created_at: string
+}
+
+export interface CreateChequeInput {
+  cheque_bought_date: string
+  cheque_date: string
+  given_by: string
+  bank: string
+  cheque_number: string
+  amount: number
+  deposited_to?: string | null
+  deposit_date?: string | null
+  cheque_given_to_type?: ChequeGivenToType | null
+  cheque_given_to_name?: string | null
+  status?: ChequeStatus
+}
+
+export interface UpdateChequeInput {
+  cheque_bought_date?: string
+  cheque_date?: string
+  given_by?: string
+  bank?: string
+  cheque_number?: string
+  amount?: number
+  deposited_to?: string | null
+  deposit_date?: string | null
+  cheque_given_to_type?: ChequeGivenToType | null
+  cheque_given_to_name?: string | null
+  status?: ChequeStatus
+}
+
+export type CustomerLedgerTransactionType = 'sale' | 'payment' | 'purchase' | 'return' | 'cheque' | 'offset'
+
+export interface CustomerLedgerTransaction {
+  id: string
+  date: string
+  type: CustomerLedgerTransactionType
+  description: string
+  debit: number
+  credit: number
+  referenceId: string | null
+}
+
+export interface CustomerLedgerSummary {
+  totalCreditSales: number
+  totalPaymentsReceived: number
+  totalPurchases: number
+  totalOffsets: number
+  netBalance: number
 }

@@ -283,7 +283,7 @@ export function ReceivablesPage() {
     (r) => r.customer_name.toLowerCase().includes(search.toLowerCase()) || r.invoice_number.toLowerCase().includes(search.toLowerCase())
   )
 
-  const totalOutstanding = filtered.reduce((sum, r) => sum + Math.max(0, r.outstanding - (r.offset_total || 0)), 0)
+  const totalOutstanding = filtered.reduce((sum, r) => sum + Math.max(0, r.outstanding), 0)
   const totalPaid = filtered.reduce((sum, r) => sum + r.total_paid, 0)
   const totalOffsets = filtered.reduce((sum, r) => sum + (r.offset_total || 0), 0)
   const totalReceivable = filtered.reduce((sum, r) => sum + Number(r.total_sales), 0)
@@ -297,7 +297,7 @@ export function ReceivablesPage() {
       if (!map[key]) {
         map[key] = { customerName: key, receivables: [], totalSales: 0, totalPaid: 0, totalOffset: 0, totalOutstanding: 0, totalOverpaid: 0, invoiceCount: 0, pendingCount: 0 }
       }
-      const outstanding = Math.max(0, r.outstanding - (r.offset_total || 0))
+      const outstanding = Math.max(0, r.outstanding)
       map[key].receivables.push(r)
       map[key].totalSales += Number(r.total_sales)
       map[key].totalPaid += r.total_paid
@@ -336,12 +336,12 @@ export function ReceivablesPage() {
       // Distribute payment across invoices (oldest first)
       let remaining = totalAmount
       const sorted = [...payAllCustomer.receivables]
-        .filter(r => Math.max(0, r.outstanding - (r.offset_total || 0)) > 0)
+        .filter(r => Math.max(0, r.outstanding) > 0)
         .sort((a, b) => new Date(a.invoice_date || a.created_at).getTime() - new Date(b.invoice_date || b.created_at).getTime())
 
       for (const r of sorted) {
         if (remaining <= 0) break
-        const outstanding = Math.max(0, r.outstanding - (r.offset_total || 0))
+        const outstanding = Math.max(0, r.outstanding)
         const payForThis = Math.min(remaining, outstanding)
         if (payForThis > 0) {
           await collectReceivablePayment({
@@ -499,7 +499,7 @@ export function ReceivablesPage() {
                   <tr><td colSpan={9} className="px-5 py-12 text-center text-slate-400">No credit sales found</td></tr>
                 ) : (
                   filtered.map((r) => {
-                    const adjustedOutstanding = Math.max(0, r.outstanding - (r.offset_total || 0))
+                    const adjustedOutstanding = Math.max(0, r.outstanding)
                     const hasOffsets = (r.offset_total || 0) > 0 && r.party_id
                     const isExpanded = expandedReceivable === r.id
                     const handleToggleOffsets = async () => {
@@ -708,7 +708,7 @@ export function ReceivablesPage() {
                         </thead>
                         <tbody className="divide-y divide-emerald-900/15">
                           {group.receivables.map((r) => {
-                            const outstanding = Math.max(0, r.outstanding - (r.offset_total || 0))
+                            const outstanding = Math.max(0, r.outstanding)
                             return (
                               <tr key={r.id} className="hover:bg-emerald-950/20 transition-colors">
                                 <td className="px-5 py-3 font-mono text-amber-200 font-semibold">{r.invoice_number}</td>

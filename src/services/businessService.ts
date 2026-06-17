@@ -1008,21 +1008,53 @@ export async function getReceivables(): Promise<ReceivableWithSale[]> {
     partyOffsetMap[o.party_id] = (partyOffsetMap[o.party_id] || 0) + Number(o.amount)
   }
 
+  // We need to process sales by party and distribute offsets to invoices (FIFO)
+  // First group sales by party
+  const salesByParty: Record<string, typeof creditSales> = {}
+  for (const sale of creditSales) {
+    if (sale.party_id) {
+      if (!salesByParty[sale.party_id]) salesByParty[sale.party_id] = []
+      salesByParty[sale.party_id].push(sale)
+    }
+  }
+
+  // Create a map to track offset usage per sale
+  const saleOffsetMap: Record<string, number> = {}
+  
+  // Process each party's sales to distribute offsets
+  for (const [partyId, partySales] of Object.entries(salesByParty)) {
+    let remainingOffset = partyOffsetMap[partyId] || 0
+    // Process sales in order (oldest first, to be FIFO)
+    const sortedSales = [...partySales].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+    for (const sale of sortedSales) {
+      if (remainingOffset <= 0) break
+      const salePayments = payments.filter((p) => p.sale_id === sale.id)
+      const totalPaid = salePayments.reduce((sum, p) => sum + Number(p.amount), 0)
+      const saleOutstandingAfterPayments = Number(sale.total_sales) - totalPaid
+      if (saleOutstandingAfterPayments > 0) {
+        const offsetForThisSale = Math.min(remainingOffset, saleOutstandingAfterPayments)
+        saleOffsetMap[sale.id] = offsetForThisSale
+        remainingOffset -= offsetForThisSale
+      }
+    }
+  }
+
   return creditSales.map((sale) => {
     const salePayments = payments.filter((p) => p.sale_id === sale.id)
     const totalPaid = salePayments.reduce((sum, p) => sum + Number(p.amount), 0)
 
-    // Calculate offset for this sale's party
-    const partyOffsetTotal = (sale.party_id && partyOffsetMap[sale.party_id]) || 0
+    // Get offset for this specific sale
+    const offsetForSale = saleOffsetMap[sale.id] || 0
 
-    // outstanding can be negative (overpaid)
-    const outstanding = Number(sale.total_sales) - totalPaid
+    // Calculate outstanding after payments and offset
+    const totalDeductions = totalPaid + offsetForSale
+    const outstanding = Number(sale.total_sales) - totalDeductions
     const overpaid = Math.max(0, -outstanding)
 
     return {
       ...sale,
       total_paid: totalPaid,
-      offset_total: partyOffsetTotal,
+      offset_total: offsetForSale,
       outstanding: Math.max(0, outstanding),
       overpaid,
       payments: salePayments,

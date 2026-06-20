@@ -60,7 +60,7 @@ export function PurchasesPage() {
           if (!partyMap[r.party_id]) {
             partyMap[r.party_id] = { name: r.customer_name, totalOutstanding: 0 }
           }
-          partyMap[r.party_id].totalOutstanding += Math.max(0, r.outstanding - (r.offset_total || 0))
+          partyMap[r.party_id].totalOutstanding += Math.max(0, r.outstanding)
         }
       }
       const customers = Object.entries(partyMap)

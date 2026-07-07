@@ -9,6 +9,17 @@ import type { PartyOffsetWithPurchase } from '../services/businessService'
 import { formatCurrency, formatDate, formatChequeNumber, parseChequeNumber, generateInvoiceNumber } from '../lib/utils'
 import { CurrencyInput } from '../components/CurrencyInput'
 
+type SupplierGroup = {
+  supplierName: string
+  invoices: PayableWithPurchase[]
+  totalAmount: number
+  totalPaid: number
+  totalOffset: number
+  totalOutstanding: number
+  invoiceCount: number
+  pendingCount: number
+}
+
 export function PayablesPage() {
   const [payables, setPayables] = useState<PayableWithPurchase[]>([])
   const [loading, setLoading] = useState(true)
@@ -23,6 +34,16 @@ export function PayablesPage() {
   const [submitting, setSubmitting] = useState(false)
   const [viewMode, setViewMode] = useState<'invoice' | 'supplier'>('supplier')
   const [expandedSupplier, setExpandedSupplier] = useState<string | null>(null)
+
+  const [showPayAllModal, setShowPayAllModal] = useState(false)
+  const [payAllSupplier, setPayAllSupplier] = useState<SupplierGroup | null>(null)
+  const [payAllAmount, setPayAllAmount] = useState('')
+  const [payAllNotes, setPayAllNotes] = useState('')
+  const [payAllDate, setPayAllDate] = useState('')
+  const [payAllMethod, setPayAllMethod] = useState<'cash' | 'cheque' | 'bank' | 'other'>('cash')
+  const [payAllChequeDate, setPayAllChequeDate] = useState('')
+  const [payAllChequeNumber, setPayAllChequeNumber] = useState('')
+  const [payAllError, setPayAllError] = useState('')
 
   const [manualPayableSupplier, setManualPayableSupplier] = useState('')
   const [manualPayableAmount, setManualPayableAmount] = useState('')
@@ -109,6 +130,18 @@ export function PayablesPage() {
     setShowPaymentModal(true)
   }
 
+  const handleOpenPayAll = (group: SupplierGroup) => {
+    setPayAllSupplier(group)
+    setPayAllAmount(String(group.totalOutstanding))
+    setPayAllNotes('')
+    setPayAllDate(new Date().toISOString().slice(0, 10))
+    setPayAllMethod('cash')
+    setPayAllChequeDate('')
+    setPayAllChequeNumber('')
+    setPayAllError('')
+    setShowPayAllModal(true)
+  }
+
   const handlePaymentSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!selectedPayable) return
@@ -142,6 +175,56 @@ export function PayablesPage() {
     }
   }
 
+  const handlePayAllSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!payAllSupplier) return
+    setPayAllError('')
+
+    const totalAmount = parseFloat(payAllAmount)
+    if (isNaN(totalAmount) || totalAmount <= 0) {
+      setPayAllError('Valid amount greater than zero is required.')
+      return
+    }
+    if (totalAmount > payAllSupplier.totalOutstanding) {
+      setPayAllError(`Amount cannot exceed outstanding balance of ${formatCurrency(payAllSupplier.totalOutstanding)}`)
+      return
+    }
+
+    setSubmitting(true)
+    try {
+      let remaining = totalAmount
+      const sorted = [...payAllSupplier.invoices]
+        .filter((p) => Math.max(0, p.outstanding - (p.offset_total || 0)) > 0)
+        .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+
+      for (const p of sorted) {
+        if (remaining <= 0) break
+        const outstanding = Math.max(0, p.outstanding - (p.offset_total || 0))
+        const payForThis = Math.min(remaining, outstanding)
+        if (payForThis > 0) {
+          await createPayablePayment({
+            purchase_id: p.id,
+            supplier_name: p.supplier_name,
+            payment_date: payAllDate,
+            method: payAllMethod,
+            cheque_date: payAllMethod === 'cheque' ? payAllChequeDate || undefined : undefined,
+            cheque_number: payAllMethod === 'cheque' ? payAllChequeNumber || undefined : undefined,
+            amount: payForThis,
+            notes: payAllNotes || undefined,
+          })
+          remaining -= payForThis
+        }
+      }
+
+      setShowPayAllModal(false)
+      await loadPayables()
+    } catch (err: unknown) {
+      setPayAllError(err instanceof Error ? err.message : 'Failed to record payment.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   const handleClearCheque = async (paymentId: string) => {
     if (!confirm('Clear this cheque? This will move the amount from On Cheque to Cash in Hand.')) return
     setClearingCheque(paymentId)
@@ -170,26 +253,24 @@ export function PayablesPage() {
         totalAmount: 0,
         totalPaid: 0,
         totalOffset: 0,
-        totalOutstanding: 0
+        totalOutstanding: 0,
+        invoiceCount: 0,
+        pendingCount: 0,
       }
     }
     acc[supplier].invoices.push(p)
     acc[supplier].totalAmount += Number(p.total_amount)
     acc[supplier].totalPaid += p.total_paid
     acc[supplier].totalOffset += p.offset_total || 0
-    acc[supplier].totalOutstanding += Math.max(0, p.outstanding - (p.offset_total || 0))
+    const outstanding = Math.max(0, p.outstanding - (p.offset_total || 0))
+    acc[supplier].totalOutstanding += outstanding
+    acc[supplier].invoiceCount += 1
+    if (outstanding > 0) acc[supplier].pendingCount += 1
     return acc
-  }, {} as Record<string, any>)
+  }, {} as Record<string, SupplierGroup>)
 
-  const supplierGroupsArray = Object.values(supplierGroups).map((g: any) => ({
-    supplierName: g.supplierName,
-    invoices: g.invoices,
-    invoiceCount: g.invoices.length,
-    totalAmount: g.totalAmount,
-    totalPaid: g.totalPaid,
-    totalOffset: g.totalOffset,
-    totalOutstanding: g.totalOutstanding
-  }))
+  const supplierGroupsArray = Object.values(supplierGroups)
+    .sort((a, b) => b.totalOutstanding - a.totalOutstanding)
 
   const totalOutstanding = filtered.reduce((sum, p) => sum + Math.max(0, p.outstanding - (p.offset_total || 0)), 0)
   const totalPaid = filtered.reduce((sum, p) => sum + p.total_paid, 0)
@@ -403,7 +484,7 @@ export function PayablesPage() {
                       </div>
                       <div>
                         <h3 className="text-sm font-bold text-slate-100">{group.supplierName}</h3>
-                        <p className="text-xs text-slate-400">{group.invoiceCount} invoice(s)</p>
+                        <p className="text-xs text-slate-400">{group.invoiceCount} invoice(s) · {group.pendingCount} pending</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-6">
@@ -425,7 +506,17 @@ export function PayablesPage() {
                         <p className="text-xs text-slate-400">Outstanding</p>
                         <p className="text-sm font-bold text-red-300">{formatCurrency(group.totalOutstanding)}</p>
                       </div>
-                      {isExpanded ? <ChevronUp size={18} className="text-slate-400" /> : <ChevronDown size={18} className="text-slate-400" />}
+                      <div className="flex items-center gap-2">
+                        {group.totalOutstanding > 0 && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleOpenPayAll(group) }}
+                            className="px-3 py-1.5 rounded-lg text-xs font-bold gradient-warning hover:shadow-lg hover:shadow-amber-500/20 text-white transition-all"
+                          >
+                            PAY ALL
+                          </button>
+                        )}
+                        {isExpanded ? <ChevronUp size={18} className="text-slate-400" /> : <ChevronDown size={18} className="text-slate-400" />}
+                      </div>
                     </div>
                   </div>
 
@@ -664,6 +755,154 @@ export function PayablesPage() {
               <button type="button" onClick={() => setShowPaymentModal(false)} className="flex-1 px-4 py-3 border border-emerald-900/40 bg-emerald-950/20 text-slate-100 rounded-xl text-sm font-semibold hover:bg-emerald-950/35 transition-all">Cancel</button>
               <button type="submit" disabled={submitting} className="flex items-center gap-2 gradient-warning hover:shadow-lg hover:shadow-amber-500/30 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 disabled:opacity-50">
                 {submitting ? 'Recording...' : 'Record Payment'}
+              </button>
+            </div>
+          </form>
+        )}
+      </Modal>
+
+      <Modal isOpen={showPayAllModal} onClose={() => setShowPayAllModal(false)} title="Pay All Outstanding" maxWidth="max-w-2xl">
+        {payAllSupplier && (
+          <form onSubmit={handlePayAllSubmit} className="space-y-4">
+            <div className="bg-emerald-950/30 border border-emerald-900/30 rounded-xl p-4">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-900/40 flex items-center justify-center text-amber-200 font-bold text-sm">
+                  {payAllSupplier.supplierName.charAt(0).toUpperCase()}
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-100">{payAllSupplier.supplierName}</h3>
+                  <p className="text-xs text-slate-400">{payAllSupplier.invoiceCount} invoice(s) · {payAllSupplier.pendingCount} pending</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-x-6 gap-y-2.5">
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-400">Total Purchases</span>
+                  <span className="font-medium text-slate-100">{formatCurrency(payAllSupplier.totalAmount)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-400">Already Paid</span>
+                  <span className="text-emerald-300">{formatCurrency(payAllSupplier.totalPaid)}</span>
+                </div>
+                {payAllSupplier.totalOffset > 0 && (
+                  <div className="flex justify-between text-sm col-span-2">
+                    <span className="text-slate-400">Receivable Offsets</span>
+                    <span className="text-blue-300">{formatCurrency(payAllSupplier.totalOffset)}</span>
+                  </div>
+                )}
+              </div>
+              <div className="flex justify-between text-sm border-t border-emerald-900/30 pt-2 mt-2">
+                <span className="text-slate-200 font-medium">Total Outstanding</span>
+                <span className="font-bold text-red-300">{formatCurrency(payAllSupplier.totalOutstanding)}</span>
+              </div>
+            </div>
+
+            <div className="space-y-1.5 max-h-40 overflow-y-auto">
+              {payAllSupplier.invoices
+                .filter((p) => Math.max(0, p.outstanding - (p.offset_total || 0)) > 0)
+                .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+                .map((p) => {
+                  const outstanding = Math.max(0, p.outstanding - (p.offset_total || 0))
+                  return (
+                    <div key={p.id} className="flex items-center justify-between bg-emerald-950/20 border border-emerald-900/20 rounded-lg px-3 py-2">
+                      <div className="text-sm">
+                        <span className="font-mono text-amber-200 font-semibold">{p.purchase_number}</span>
+                        <span className="text-slate-400 ml-2 text-xs">{formatDate(p.created_at)}</span>
+                      </div>
+                      <span className="text-sm font-bold text-red-300">{formatCurrency(outstanding)}</span>
+                    </div>
+                  )
+                })}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
+              <div>
+                <label className="block text-sm font-semibold text-slate-200 mb-1.5">Payment Date</label>
+                <input
+                  type="date"
+                  value={payAllDate}
+                  onChange={(e) => setPayAllDate(e.target.value)}
+                  className="w-full px-4 py-3.5 h-[54px] input-surface rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-slate-200 mb-1.5">Method</label>
+                <div className="grid grid-cols-4 gap-2">
+                  {(['cash', 'cheque', 'bank', 'other'] as const).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setPayAllMethod(m)}
+                      className={`w-full h-[54px] px-3.5 rounded-xl text-xs font-semibold border transition-all ${payAllMethod === m ? 'bg-emerald-500/15 border-emerald-900/40 text-emerald-200' : 'border-emerald-900/30 text-slate-300 hover:bg-emerald-950/30'}`}
+                    >
+                      {m.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {payAllMethod === 'cheque' && (
+              <div className="surface-2 rounded-xl p-4 space-y-3 border border-emerald-900/20">
+                <div className="text-sm font-semibold text-slate-100">Cheque</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Cheque Date</label>
+                    <input
+                      type="date"
+                      value={payAllChequeDate}
+                      onChange={(e) => setPayAllChequeDate(e.target.value)}
+                      className="w-full px-4 py-2.5 input-surface rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">Cheque Number</label>
+                    <input
+                      type="text"
+                      value={formatChequeNumber(payAllChequeNumber)}
+                      onChange={(e) => setPayAllChequeNumber(parseChequeNumber(e.target.value))}
+                      placeholder="XXXXXX-XXXX-XXX"
+                      maxLength={15}
+                      className="w-full px-4 py-2.5 input-surface rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div>
+              <label className="block text-sm font-semibold text-slate-200 mb-1.5">Payment Amount</label>
+              <CurrencyInput
+                value={payAllAmount}
+                onChange={setPayAllAmount}
+                placeholder="0.00"
+                min={0.01}
+                max={payAllSupplier.totalOutstanding}
+                className="w-full pl-12 pr-4 py-3 input-surface rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
+                required
+              />
+              <p className="text-xs text-slate-500 mt-1">Payment will be distributed across purchases (oldest first)</p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold text-slate-200 mb-1.5">Notes (optional)</label>
+              <textarea
+                value={payAllNotes}
+                onChange={(e) => setPayAllNotes(e.target.value)}
+                placeholder="Payment reference..."
+                rows={2}
+                className="w-full px-4 py-3 input-surface rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+              />
+            </div>
+
+            {payAllError && (
+              <div className="bg-red-950/30 border border-red-900/40 text-red-200 text-sm rounded-xl px-4 py-3">{payAllError}</div>
+            )}
+
+            <div className="flex gap-3 pt-2">
+              <button type="button" onClick={() => setShowPayAllModal(false)} className="flex-1 px-4 py-3 border border-emerald-900/40 bg-emerald-950/20 text-slate-100 rounded-xl text-sm font-semibold hover:bg-emerald-950/35 transition-all">Cancel</button>
+              <button type="submit" disabled={submitting} className="flex items-center gap-2 gradient-warning hover:shadow-lg hover:shadow-amber-500/30 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 disabled:opacity-50">
+                {submitting ? 'Recording...' : `Pay ${formatCurrency(parseFloat(payAllAmount) || 0)}`}
               </button>
             </div>
           </form>

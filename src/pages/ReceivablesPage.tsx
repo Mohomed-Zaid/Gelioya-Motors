@@ -432,13 +432,21 @@ export function ReceivablesPage() {
                         {formatCurrency(payment.amount)} · {payment.cheque_number ? formatChequeNumber(payment.cheque_number) : 'No cheque number'} · {formatDate(payment.payment_date || payment.created_at)}
                       </div>
                     </div>
-                    <button
-                      onClick={() => handleClearCheque(payment.id)}
-                      disabled={clearingCheque === payment.id}
-                      className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500/15 text-emerald-200 border border-emerald-900/40 hover:bg-emerald-500/25 transition-all disabled:opacity-50"
-                    >
-                      {clearingCheque === payment.id ? 'Clearing...' : 'Clear'}
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => handleClearCheque(payment.id)}
+                        disabled={clearingCheque === payment.id}
+                        className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500/15 text-emerald-200 border border-emerald-900/40 hover:bg-emerald-500/25 transition-all disabled:opacity-50"
+                      >
+                        {clearingCheque === payment.id ? 'Clearing...' : 'Clear'}
+                      </button>
+                      <button
+                        onClick={() => setShowDeletePaymentConfirm(payment.id)}
+                        className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-500/15 text-red-200 border border-red-900/40 hover:bg-red-500/25 transition-all"
+                      >
+                        Delete
+                      </button>
+                    </div>
                   </div>
                 ))}
             </div>

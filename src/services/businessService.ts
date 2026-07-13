@@ -2197,6 +2197,28 @@ export async function clearReceivableCheque(paymentId: string): Promise<void> {
   await logCashTransaction('receivable_cheque_cleared', 'receivable_payment', paymentId, Number(payment.amount), 'in', `Cheque cleared: ${payment.cheque_number || 'N/A'}`)
 }
 
+export async function removeReceivableCheque(paymentId: string): Promise<void> {
+  const { data: payment, error: fetchError } = await getClient()
+    .from('receivable_payments')
+    .select('*')
+    .eq('id', paymentId)
+    .single()
+  if (fetchError) throw fetchError
+  if (!payment) throw new Error('Payment not found.')
+  if (payment.method !== 'cheque') throw new Error('This is not a cheque payment.')
+
+  const { error: updateError } = await getClient()
+    .from('receivable_payments')
+    .update({
+      method: 'other',
+      cheque_date: null,
+      cheque_number: null,
+      cheque_status: null,
+    })
+    .eq('id', paymentId)
+  if (updateError) throw updateError
+}
+
 export async function clearPayableCheque(paymentId: string): Promise<void> {
   const ledger = await getLedger()
   if (!ledger) throw new Error('No active ledger. Set up opening balances first.')

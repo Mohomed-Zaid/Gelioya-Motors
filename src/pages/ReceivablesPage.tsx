@@ -3,7 +3,7 @@ import { HandCoins, Plus, Search, Pencil, Trash2, ChevronDown, ChevronUp, Users,
 import { AppShell } from '../layout/AppShell'
 import { Modal } from '../components/Modal'
 import { SummaryCard } from '../components/SummaryCard'
-import { getReceivables, collectReceivablePayment, deleteReceivablePayment, updateSale, deleteSale, getPartyOffsets, createSale, getParties, clearReceivableCheque, getNextNumber, createPartyIfMissing, updateLedger, getLedger, getClient, getReceivablePayments } from '../services/businessService'
+import { getReceivables, collectReceivablePayment, deleteReceivablePayment, updateSale, deleteSale, getPartyOffsets, createSale, getParties, clearReceivableCheque, removeReceivableCheque, getNextNumber, createPartyIfMissing, updateLedger, getLedger, getClient, getReceivablePayments } from '../services/businessService'
 import type { ReceivableWithSale, PaymentType, SaleItemInput, Party } from '../types'
 import type { PartyOffsetWithPurchase } from '../services/businessService'
 import { formatCurrency, formatDate, parseCurrencyInput, todayISO, formatChequeNumber, parseChequeNumber, generateInvoiceNumber } from '../lib/utils'
@@ -45,6 +45,7 @@ export function ReceivablesPage() {
   const [showDeleteSaleConfirm, setShowDeleteSaleConfirm] = useState<string | null>(null)
   const [showEditModal, setShowEditModal] = useState(false)
   const [clearingCheque, setClearingCheque] = useState<string | null>(null)
+  const [removingCheque, setRemovingCheque] = useState<string | null>(null)
   const [editReceivable, setEditReceivable] = useState<ReceivableWithSale | null>(null)
   const [editCustomerName, setEditCustomerName] = useState('')
   const [editTotalSales, setEditTotalSales] = useState('')
@@ -279,6 +280,20 @@ export function ReceivablesPage() {
     }
   }
 
+  const handleRemoveCheque = async (paymentId: string) => {
+    if (!confirm('Delete this cheque from the pending list? This will keep the payment amount as-is and only remove the cheque details.')) return
+    setRemovingCheque(paymentId)
+    try {
+      await removeReceivableCheque(paymentId)
+      await loadReceivables()
+    } catch (err) {
+      console.error(err)
+      alert(err instanceof Error ? err.message : 'Failed to delete cheque.')
+    } finally {
+      setRemovingCheque(null)
+    }
+  }
+
   const filtered = receivables.filter(
     (r) => r.customer_name.toLowerCase().includes(search.toLowerCase()) || r.invoice_number.toLowerCase().includes(search.toLowerCase())
   )
@@ -435,16 +450,17 @@ export function ReceivablesPage() {
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => handleClearCheque(payment.id)}
-                        disabled={clearingCheque === payment.id}
+                        disabled={clearingCheque === payment.id || removingCheque === payment.id}
                         className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500/15 text-emerald-200 border border-emerald-900/40 hover:bg-emerald-500/25 transition-all disabled:opacity-50"
                       >
                         {clearingCheque === payment.id ? 'Clearing...' : 'Clear'}
                       </button>
                       <button
-                        onClick={() => setShowDeletePaymentConfirm(payment.id)}
-                        className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-500/15 text-red-200 border border-red-900/40 hover:bg-red-500/25 transition-all"
+                        onClick={() => handleRemoveCheque(payment.id)}
+                        disabled={removingCheque === payment.id || clearingCheque === payment.id}
+                        className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-500/10 text-red-200 border border-red-900/40 hover:bg-red-500/20 transition-all disabled:opacity-50"
                       >
-                        Delete
+                        {removingCheque === payment.id ? 'Deleting...' : 'Delete'}
                       </button>
                     </div>
                   </div>
